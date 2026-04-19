@@ -141,6 +141,28 @@ async function persistWebSearchSetting(checked) {
   }
 }
 
+/** Masked preview for empty token field when a token is already saved (last 4 from API). */
+function telegramSavedTokenPlaceholder(maskedFromApi) {
+  const masked = String(maskedFromApi || '').replace(/\s/g, '');
+  const last4 = masked.slice(-4) || '????';
+  return `xxxxxxxxxxxx-xxxx-${last4}`;
+}
+
+/** Replacing a stored Telegram token requires two separate OK confirmations. */
+function confirmReplaceSavedTelegramToken() {
+  if (!lastSettingsForGui?.hasSavedToken) return true;
+  const ok1 = window.confirm(
+    'A Telegram bot token is already saved on this machine.\n\n' +
+      'Do you want to replace it with the new token you entered?'
+  );
+  if (!ok1) return false;
+  const ok2 = window.confirm(
+    'Second confirmation: the saved bot token will be overwritten.\n\n' +
+      'Choose OK only if you intend to switch to a new token.'
+  );
+  return ok2;
+}
+
 function wireWebSearchToggles() {
   for (const el of webSearchToggleInputs()) {
     el?.addEventListener('change', () => {
@@ -162,7 +184,15 @@ async function loadSettingsIntoForm() {
 
   $('projectRoot').textContent = s.projectRoot || '';
 
-  $('telegramBotToken').value = '';
+  const tokInp = $('telegramBotToken');
+  if (tokInp) {
+    tokInp.value = '';
+    if (s.hasSavedToken && s.telegramBotTokenMasked) {
+      tokInp.placeholder = telegramSavedTokenPlaceholder(s.telegramBotTokenMasked);
+    } else {
+      tokInp.placeholder = '';
+    }
+  }
   $('allowedUserIds').value = s.allowedUserIds || '';
   $('ollamaBaseUrl').value = s.ollamaBaseUrl || 'http://127.0.0.1:11434';
   $('llamaServerUrl').value = s.llamaServerUrl || 'http://127.0.0.1:8080';
@@ -202,9 +232,11 @@ async function loadSettingsIntoForm() {
 
   const hint = $('tokenHint');
   if (s.hasSavedToken && s.telegramBotTokenMasked) {
-    hint.textContent = `Token active (ends ${s.telegramBotTokenMasked.slice(-4)}) — paste to replace.`;
+    if (hint)
+      hint.textContent =
+        'Token saved. To replace it, paste a new token and click the check (or Save settings) — you must approve twice.';
   } else {
-    hint.textContent = 'Paste token from @BotFather.';
+    if (hint) hint.textContent = 'Paste token from @BotFather, then click the check to save.';
   }
 
   await refreshModelDropdown(String(s.llmModel || '').trim(), { resetSelection: false });
@@ -1287,7 +1319,6 @@ async function loadPending() {
 }
 
 async function saveAll() {
-  setStatus('Saving…', '');
   try {
     const body = {
       allowedUserIds: $('allowedUserIds').value.trim(),
@@ -1304,7 +1335,16 @@ async function saveAll() {
       webSearchEnabled: $('webSearchEnabled') ? $('webSearchEnabled').checked : false,
     };
     const tok = $('telegramBotToken').value.trim();
-    if (tok) body.telegramBotToken = tok;
+    if (tok) {
+      if (lastSettingsForGui?.hasSavedToken) {
+        if (!confirmReplaceSavedTelegramToken()) {
+          setStatus('Save cancelled — bot token unchanged.', '');
+          return;
+        }
+      }
+      body.telegramBotToken = tok;
+    }
+    setStatus('Saving…', '');
     const oa = $('openaiApiKey')?.value?.trim() || '';
     if (oa) body.openaiApiKey = oa;
     const gm = $('geminiApiKey')?.value?.trim() || '';
@@ -1352,6 +1392,53 @@ $('btnRefreshModels').addEventListener('click', () => {
 $('btnSave').addEventListener('click', saveAll);
 
 wireWebSearchToggles();
+
+async function saveTelegramTokenFromField() {
+  const inp = $('telegramBotToken');
+  const btn = $('btnTelegramTokenDone');
+  if (!inp) return;
+  const tok = inp.value.trim();
+  if (!tok) {
+    setStatus('Paste your bot token first.', 'err');
+    return;
+  }
+  if (lastSettingsForGui?.hasSavedToken) {
+    if (!confirmReplaceSavedTelegramToken()) {
+      setStatus('Token replace cancelled.', '');
+      return;
+    }
+  }
+  if (btn) btn.disabled = true;
+  setStatus('Saving bot token…', '');
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegramBotToken: tok }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    logLine('Telegram bot token saved.');
+    setStatus('Bot token saved.', 'ok');
+    await loadSettingsIntoForm();
+    await loadOverview();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Telegram token save: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+$('btnTelegramTokenDone')?.addEventListener('click', () => {
+  saveTelegramTokenFromField().catch((e) => setStatus(e.message, 'err'));
+});
+
+$('telegramBotToken')?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  saveTelegramTokenFromField().catch((e) => setStatus(e.message, 'err'));
+});
 
 $('btnResetTelegram')?.addEventListener('click', async () => {
   const sure = window.confirm(

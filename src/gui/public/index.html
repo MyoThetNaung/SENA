@@ -393,22 +393,34 @@
           <h1>Telegram</h1>
           <div class="card">
             <label>Bot token (only required field)</label>
-            <input type="password" id="telegramBotToken" autocomplete="off" />
+            <div class="telegram-token-row">
+              <input type="password" id="telegramBotToken" autocomplete="off" />
+              <button
+                type="button"
+                id="btnTelegramTokenDone"
+                class="telegram-token-done"
+                aria-label="Save bot token"
+                title="Save token"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              </button>
+            </div>
             <p class="hint" id="tokenHint"></p>
             <label>Legacy: auto-approve user IDs (optional)</label>
             <input type="text" id="allowedUserIds" placeholder="comma-separated — skips approval queue" />
-            <p class="hint">
-              Leave empty to approve new users from the Access tab. If you list IDs here, they are approved
-              immediately without using the GUI.
-            </p>
-            <hr />
-            <h3>Fresh setup (another machine)</h3>
-            <p class="hint">
-              Removes the bot token and legacy IDs saved in <code>data/settings.json</code>, clears the access list in
-              SQLite (pending / approved / blocked), and stops the bot if it is running. Chat history and memory are
-              unchanged. If the token is only in <code>.env</code>, clear that file yourself or unset
-              <code>TELEGRAM_BOT_TOKEN</code> / <code>ALLOWED_USER_IDS</code>.
-            </p>
             <button type="button" id="btnResetTelegram" class="danger ghost wide">Reset Telegram setup</button>
           </div>
         </section>
@@ -692,9 +704,6 @@
 
         <section class="tab-panel" id="panel-chat">
           <h1>Chat</h1>
-          <p class="lead">
-            Same assistant and SQLite log as Telegram — choose a <strong>session</strong> (Telegram user id) in the list.
-          </p>
           <div class="card chat-console">
             <div class="toolbar chat-toolbar">
               <div class="session-select-wrap">
