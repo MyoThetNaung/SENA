@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.log
+.DS_Store
+
+# llama.cpp / CUDA binaries are too large for GitHub; copy locally (see engine/README.txt)
+engine/*.dll
+engine/*.exe
+data/settings.json
+data/*.db
+data/*.db-shm
+data/*.db-wal
+models/*.gguf

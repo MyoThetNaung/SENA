@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+  <!-- Tracks -->
+  <line x1="4" y1="8" x2="20" y2="8" stroke="#38bdf8" stroke-width="1.6" stroke-linecap="round"/>
+  <line x1="4" y1="16" x2="20" y2="16" stroke="#38bdf8" stroke-width="1.6" stroke-linecap="round"/>
+
+  <!-- Top knob (cyan ring — matches overview frame) -->
+  <circle cx="9" cy="8" r="2" fill="#0f172a" stroke="#38bdf8" stroke-width="1.6"/>
+
+  <!-- Bottom knob (green accent — same as overview graph) -->
+  <circle cx="15" cy="16" r="2" fill="#0f172a" stroke="#22c55e" stroke-width="1.6"/>
+</svg>

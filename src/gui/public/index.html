@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SENA (Smart Engine for Notes &amp; Action) AI Assistant — Control Panel</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Audiowide&amp;display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand" title="SENA (Smart Engine for Notes &amp; Action) AI Assistant">
+          <div class="brand-row">
+            <span class="brand-logo-wrap">
+              <img
+                class="brand-logo"
+                src="/sena-logo.svg"
+                width="48"
+                height="48"
+                alt=""
+                decoding="async"
+              />
+            </span>
+            <div class="brand-name audiowide-regular">SENA</div>
+          </div>
+          <div class="brand-tagline">Smart Engine for Notes &amp; Action</div>
+        </div>
+        <nav class="nav" id="mainNav">
+          <button type="button" class="nav-item active" data-tab="overview">
+            <img class="nav-icon" src="/nav-icons/overview.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Overview</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="engine">
+            <img class="nav-icon" src="/nav-icons/engine.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Engine &amp; models</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="data">
+            <img class="nav-icon" src="/nav-icons/memory.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Memory</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="chat">
+            <img class="nav-icon" src="/nav-icons/chat.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Chat</span>
+          </button>
+          <div class="nav-group" id="navSettingsGroup" role="group" aria-label="Settings">
+            <button
+              type="button"
+              class="nav-settings-toggle"
+              id="navSettingsToggle"
+              aria-expanded="false"
+              aria-controls="navSettingsSub"
+            >
+              <span class="nav-settings-toggle-text">
+                <img class="nav-icon" src="/nav-icons/settings.svg" width="22" height="22" alt="" />
+                Settings
+              </span>
+            </button>
+            <div class="nav-settings-sub" id="navSettingsSub">
+              <button type="button" class="nav-item nav-item-sub" data-tab="telegram">
+                <img class="nav-icon nav-icon-sub" src="/nav-icons/telegram.svg" width="20" height="20" alt="" />
+                <span class="nav-item-label">Telegram</span>
+              </button>
+              <button type="button" class="nav-item nav-item-sub" data-tab="access">
+                <img class="nav-icon nav-icon-sub" src="/nav-icons/access.svg" width="20" height="20" alt="" />
+                <span class="nav-item-label">Access</span>
+              </button>
+              <button type="button" class="nav-item nav-item-sub" data-tab="calendar">
+                <img class="nav-icon nav-icon-sub" src="/nav-icons/calendar.svg" width="20" height="20" alt="" />
+                <span class="nav-item-label">Calendar</span>
+              </button>
+              <button type="button" class="nav-item nav-item-sub" data-tab="pending">
+                <img class="nav-icon nav-icon-sub" src="/nav-icons/pending.svg" width="20" height="20" alt="" />
+                <span class="nav-item-label">Pending</span>
+              </button>
+              <button type="button" class="nav-item nav-item-sub" data-tab="system">
+                <img class="nav-icon nav-icon-sub" src="/nav-icons/system.svg" width="20" height="20" alt="" />
+                <span class="nav-item-label">System</span>
+              </button>
+            </div>
+          </div>
+        </nav>
+        <div class="sidebar-actions">
+          <button type="button" id="btnStart" class="success wide">Start bot</button>
+          <button type="button" id="btnStop" class="danger wide">Stop bot</button>
+        </div>
+      </aside>
+      <main class="main">
+        <p id="status" class="statusbar" aria-live="polite"></p>
+
+        <section class="tab-panel active" id="panel-overview">
+          <h1>Overview</h1>
+
+          <div class="overview-status-grid">
+            <div class="status-card" id="overviewCardBotName">
+              <div class="status-card-label">I am</div>
+              <div id="overviewBotName" class="status-card-value status-card-value-name">…</div>
+            </div>
+
+            <div class="status-card" id="overviewCardServer">
+              <div class="status-card-head">
+                <span class="status-card-label">LLM server</span>
+                <span id="overviewServerLed" class="status-led" title="" aria-hidden="true"></span>
+              </div>
+              <div id="overviewServerLine" class="status-card-value">…</div>
+              <div id="overviewServerDetail" class="status-card-sub"></div>
+            </div>
+
+            <div class="status-card" id="overviewCardTelegram">
+              <div class="status-card-head">
+                <span class="status-card-label">Telegram bot</span>
+                <span id="overviewTelegramLed" class="status-led" title="" aria-hidden="true"></span>
+              </div>
+              <div id="overviewTelegramLine" class="status-card-value">…</div>
+            </div>
+          </div>
+
+          <div class="overview-hardware-wrap">
+            <div class="status-card" id="overviewCardHardware">
+              <div class="status-card-label">System hardware</div>
+              <div class="hardware-gauges">
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--cpu"
+                    id="overviewGaugeCpu"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="CPU usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeCpuMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">CPU</span>
+                    <span class="gauge-cores" id="overviewCpuCores">—</span>
+                    <span class="gauge-temp gauge-temp--optional" id="overviewTempCpu" hidden></span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--ram"
+                    id="overviewGaugeRam"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="RAM usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeRamMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">RAM</span>
+                    <span class="gauge-mem-detail" id="overviewRamDetail">—</span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--gpu"
+                    id="overviewGaugeGpu"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="GPU usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeGpuMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">GPU</span>
+                    <span class="gauge-temp" id="overviewTempGpu">—</span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--vram"
+                    id="overviewGaugeVram"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="VRAM usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeVramMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">VRAM</span>
+                    <span class="gauge-vram-detail" id="overviewVramDetail">—</span>
+                  </div>
+                </div>
+              </div>
+              <div class="hardware-usage-charts" aria-label="CPU, RAM, and GPU usage over time">
+                <div class="usage-chart">
+                  <span class="usage-chart-label">CPU %</span>
+                  <canvas id="overviewChartCpu" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+                <div class="usage-chart">
+                  <span class="usage-chart-label">RAM %</span>
+                  <canvas id="overviewChartRam" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+                <div class="usage-chart">
+                  <span class="usage-chart-label">GPU %</span>
+                  <canvas id="overviewChartGpu" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+              </div>
+              <p id="overviewHwMeta" class="hint hardware-meta"></p>
+            </div>
+          </div>
+
+          <div class="overview-engine-strip">
+            <div class="status-card status-card--compact">
+              <div class="status-card-label">LLM backend</div>
+              <div id="overviewLlmBackend" class="status-card-value">…</div>
+            </div>
+            <div class="status-card status-card--compact">
+              <div class="status-card-label">llama-server base URL</div>
+              <div id="overviewLlamaServerUrl" class="status-card-value status-card-value-mono">…</div>
+            </div>
+            <div class="status-card status-card--compact">
+              <div class="status-card-label">Active model</div>
+              <div id="overviewActiveModel" class="status-card-value">…</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-engine">
+          <h1>Engine &amp; models</h1>
+          <p class="lead">Ollama or llama.cpp <code>llama-server</code> (OpenAI API). GGUF files live under <code>models/</code>; put <code>llama-server.exe</code> in <code>engine/</code>.</p>
+
+          <div class="engine-toolbar">
+            <button type="button" id="btnSave">Save settings</button>
+            <div id="wrapServerActions" class="engine-server-actions">
+              <button type="button" id="btnStartServer">Start server</button>
+              <button type="button" id="btnStopServer">Stop server</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Backend</h2>
+            <label>LLM backend</label>
+            <select id="llmProvider">
+              <option value="ollama">Ollama</option>
+              <option value="llama-server">llama.cpp server (OpenAI API)</option>
+            </select>
+
+            <div id="wrapOllama">
+              <label>Ollama base URL</label>
+              <input type="text" id="ollamaBaseUrl" />
+            </div>
+            <div id="wrapLlama" class="hidden">
+              <label>llama-server base URL</label>
+              <input type="text" id="llamaServerUrl" placeholder="http://127.0.0.1:8080" />
+              <p class="hint">
+                Use <strong>Start server</strong> above to launch <code>engine/llama-server.exe</code> with your
+                selected GGUF (URL must match <code>--host</code> / <code>--port</code>). Or run
+                <code>llama-server.exe</code> manually. Switch to Ollama above if you use that instead.
+                The Overview tab reads the <strong>saved</strong> base URL — click <strong>Save settings</strong> after
+                you change host or port.
+              </p>
+              <label class="inline"
+                ><input type="checkbox" id="autoStartLlamaServer" /> Also auto-start llama-server when you click
+                <strong>Start bot</strong> (same binary + GGUF rules)</label
+              >
+            </div>
+
+            <label>Active model</label>
+            <div class="row">
+              <select id="llmModel"></select>
+              <button type="button" id="btnRefreshModels" class="primary ghost">Refresh list</button>
+            </div>
+            <p class="hint">
+              Choose the model, then click <strong>Save settings</strong> above (or <strong>Save Bot Personal</strong>
+              in Memory — both save the active model). The bot uses this after reload; refresh the list if your GGUF name
+              is missing.
+            </p>
+            <p class="hint" id="catalogHint"></p>
+
+            <label>Models folder (GGUF weights)</label>
+            <input type="text" id="modelsDir" placeholder="models" />
+            <p class="hint">Resolved: <code id="modelsDirResolved"></code></p>
+
+            <label>Engine folder (binaries)</label>
+            <input type="text" id="engineDir" placeholder="engine" />
+            <p class="hint">Resolved: <code id="engineDirResolved"></code> — see <code>engine/README.txt</code></p>
+
+            <h3>GGUF files</h3>
+            <div id="ggufList" class="file-list"></div>
+            <p class="hint err" id="ggufError"></p>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-telegram">
+          <h1>Telegram</h1>
+          <div class="card">
+            <label>Bot token (only required field)</label>
+            <input type="password" id="telegramBotToken" autocomplete="off" />
+            <p class="hint" id="tokenHint"></p>
+            <label>Legacy: auto-approve user IDs (optional)</label>
+            <input type="text" id="allowedUserIds" placeholder="comma-separated — skips approval queue" />
+            <p class="hint">
+              Leave empty to approve new users from the Access tab. If you list IDs here, they are approved
+              immediately without using the GUI.
+            </p>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-access">
+          <h1>Who can use the bot</h1>
+          <p class="lead">
+            When someone messages your bot for the first time, they appear here as <strong>pending</strong>. Approve to
+            let them chat, or deny to block.
+          </p>
+          <div class="toolbar">
+            <button type="button" id="btnRefreshAccess" class="primary ghost">Refresh</button>
+          </div>
+          <h2>Pending approval</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th>Name</th>
+                  <th>First message</th>
+                  <th>Since</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessPendingBody"></tbody>
+            </table>
+          </div>
+          <h2>Approved</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th>Last seen</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessApprovedBody"></tbody>
+            </table>
+          </div>
+          <h2>Blocked</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessBlockedBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-data">
+          <h1>Memory &amp; bot persona</h1>
+          <p class="lead">
+            Configure the assistant identity (all chats) and per-session user memory (Telegram user id or Control panel).
+          </p>
+
+          <div class="card mem-bot-card">
+            <h2>Assistant (bot) identity</h2>
+            <p class="hint">Saved in <code>data/settings.json</code> — used in the system prompt for every session.</p>
+            <div class="mem-grid mem-bot-grid">
+              <div>
+                <label>Bot display name</label>
+                <input type="text" id="botDisplayName" placeholder="e.g. AI_AGENT_NG2" />
+              </div>
+              <div>
+                <label>Bot gender (persona)</label>
+                <select id="botGender">
+                  <option value="">—</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+              </div>
+              <div class="mem-span2">
+                <label>Reply style</label>
+                <input type="text" id="botStyle" placeholder="e.g. concise, friendly" />
+              </div>
+              <div>
+                <label>Call me (English)</label>
+                <input type="text" id="botAddressUserEn" placeholder="e.g. friend, sir, မင်း" />
+              </div>
+              <div>
+                <label>Call me (Myanmar)</label>
+                <input type="text" id="botAddressUserMy" placeholder="ဥပမာ — ညီလေး၊ မင်း၊ အစ်ကို" />
+              </div>
+              <div class="mem-span2">
+                <label>What the bot does / role</label>
+                <textarea
+                  id="botRole"
+                  rows="6"
+                  placeholder="Describe the assistant’s job, boundaries, and behavior (multiple lines)."
+                ></textarea>
+              </div>
+            </div>
+            <button type="button" id="btnSaveBotPersona">Save Bot Personal</button>
+          </div>
+
+          <div class="card mem-user-card">
+            <h2>User memory by session</h2>
+            <p class="hint">Stored per Telegram user id in SQLite <code>soul</code> table — same data the bot uses in chat.</p>
+            <div class="toolbar mem-toolbar">
+              <label>Session</label>
+              <select id="memSessionSelect" class="chat-session-select"></select>
+              <button type="button" id="btnMemReload" class="primary ghost">Reload</button>
+            </div>
+            <div class="mem-grid">
+              <div>
+                <label>Display name</label>
+                <input type="text" id="memDisplayName" placeholder="Name to use in replies" />
+              </div>
+              <div>
+                <label>Gender</label>
+                <select id="memGender">
+                  <option value="">—</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label>Age</label>
+                <select id="memAge">
+                  <option value="">—</option>
+                  <option value="Under 13">Under 13</option>
+                  <option value="13-17">13–17</option>
+                  <option value="18-24">18–24</option>
+                  <option value="25-34">25–34</option>
+                  <option value="35-44">35–44</option>
+                  <option value="45-54">45–54</option>
+                  <option value="55-64">55–64</option>
+                  <option value="65+">65+</option>
+                </select>
+              </div>
+              <div class="mem-span2">
+                <label>Who I am</label>
+                <textarea id="memWhoAmI" rows="2" placeholder="Short self-description"></textarea>
+              </div>
+              <div class="mem-span2">
+                <label>Work / occupation</label>
+                <textarea id="memWork" rows="2" placeholder="Job, studies, etc."></textarea>
+              </div>
+              <div class="mem-span2">
+                <label>Other notes</label>
+                <textarea id="memExtra" rows="2" placeholder="Anything else to remember"></textarea>
+              </div>
+              <div class="mem-span2">
+                <label>Conversation memory</label>
+                <p class="hint">
+                  Auto-updated after chats (rolling summary of what you discussed). You can edit here; bot identity and
+                  fields above are only changed in this panel, not from Telegram text tricks.
+                </p>
+                <textarea
+                  id="memMemorySummary"
+                  rows="8"
+                  placeholder="Summary appears after you chat; editable anytime."
+                ></textarea>
+              </div>
+            </div>
+            <div class="mem-actions">
+              <button type="button" id="btnSaveMemSession" class="success">Save session memory</button>
+              <button type="button" id="btnClearMemSession" class="danger ghost">Clear this session memory</button>
+            </div>
+            <div class="mem-copy-row">
+              <label>Copy memory from</label>
+              <select id="memCopyFromSelect"></select>
+              <button type="button" id="btnCopyMemSession" class="primary ghost">Copy into current session</button>
+            </div>
+          </div>
+
+          <div class="card mem-danger-card">
+            <h2>Reset all stored memory</h2>
+            <p class="mem-danger-hint">
+              Removes <strong>all</strong> rows from user memory (soul), <strong>all</strong> chat log lines, pending
+              confirmations, and calendar events (events are tied to soul). Does <strong>not</strong> remove Telegram
+              access list or bot persona in settings.
+            </p>
+            <button type="button" id="btnClearAllMemory" class="danger wide">Clear ALL memory (whole database)</button>
+          </div>
+
+          <div class="card">
+            <h2>All soul rows (overview)</h2>
+            <button type="button" id="btnRefreshSouls" class="primary ghost">Refresh table</button>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Name</th>
+                    <th>Summary preview</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody id="soulBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-chat">
+          <h1>Chat</h1>
+          <p class="lead">
+            Same assistant and SQLite log as Telegram — choose a <strong>session</strong> (Telegram user id) in the list.
+          </p>
+          <div class="card chat-console">
+            <div class="toolbar chat-toolbar">
+              <label>Session</label>
+              <select id="chatSessionSelect" class="chat-session-select"></select>
+              <label>History</label>
+              <select id="chatLimit">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+              <button type="button" id="btnRefreshChat" class="primary ghost">Refresh</button>
+            </div>
+            <p class="hint chat-session-hint" id="chatSessionHint"></p>
+            <div id="chatThread" class="chat-thread" aria-live="polite"></div>
+            <div class="chat-compose">
+              <textarea id="chatInput" rows="3" placeholder="Type a message… (Enter to send, Shift+Enter newline)"></textarea>
+              <button type="button" id="btnChatSend" class="success">Send</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-calendar">
+          <h1>Calendar</h1>
+          <button type="button" id="btnRefreshCal" class="primary ghost">Refresh</button>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Starts</th>
+                  <th>User</th>
+                  <th>Title</th>
+                </tr>
+              </thead>
+              <tbody id="calBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-pending">
+          <h1>Pending confirmations</h1>
+          <button type="button" id="btnRefreshPending" class="primary ghost">Refresh</button>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Kind</th>
+                  <th>Payload</th>
+                  <th>Since</th>
+                </tr>
+              </thead>
+              <tbody id="pendingBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-system">
+          <h1>System</h1>
+          <div class="card">
+            <label>SQLite database path</label>
+            <input type="text" id="databasePath" />
+            <p class="hint">Resolved: <code id="databasePathResolved"></code></p>
+
+            <label>Web browse timeout (ms)</label>
+            <input type="number" id="browserTimeoutMs" min="1000" max="60000" step="500" />
+
+            <label>Max pages per search</label>
+            <input type="number" id="maxBrowsePages" min="1" max="2" />
+
+            <label>Log level</label>
+            <select id="logLevel">
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+            </select>
+
+            <label class="inline"
+              ><input type="checkbox" id="openBrowserGui" /> Open browser when starting Control Panel</label
+            >
+
+            <label>Control panel port (restart app)</label>
+            <input type="number" id="guiPort" min="1024" max="65535" />
+
+            <p class="hint">Settings: <code id="settingsPath"></code></p>
+            <p class="hint">Project: <code id="projectRoot"></code></p>
+          </div>
+        </section>
+
+        <pre id="log" class="log"></pre>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
