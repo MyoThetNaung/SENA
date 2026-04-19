@@ -1,5 +1,8 @@
 const $ = (id) => document.getElementById(id);
 
+/** Last `/api/settings` JSON — used to merge global bot persona with per-session overrides in Memory. */
+let lastSettingsForGui = null;
+
 /** Tabs nested under the Settings toggle (sidebar). */
 const SETTINGS_SUB_TABS = new Set(['telegram', 'access', 'calendar', 'pending', 'system']);
 
@@ -13,6 +16,27 @@ function setSettingsGroupOpen(open) {
 
 function syncSettingsGroupForTab(name) {
   if (SETTINGS_SUB_TABS.has(name)) setSettingsGroupOpen(true);
+}
+
+const MEMORY_SUBTAB_KEY = 'guiMemorySubtab';
+
+function setMemorySubtab(which) {
+  const allowed = new Set(['bot', 'session', 'souls']);
+  const w = allowed.has(which) ? which : 'bot';
+  try {
+    localStorage.setItem(MEMORY_SUBTAB_KEY, w);
+  } catch {
+    /* ignore */
+  }
+  document.querySelectorAll('.mem-stab-link').forEach((btn) => {
+    const on = btn.dataset.memSub === w;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.mem-subpane').forEach((pane) => {
+    if (pane.dataset.memSub === w) pane.removeAttribute('hidden');
+    else pane.setAttribute('hidden', '');
+  });
 }
 
 function setStatus(msg, kind) {
@@ -35,28 +59,105 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function fmtSize(bytes) {
-  const n = Number(bytes) || 0;
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + ' MB';
-  if (n >= 1e3) return (n / 1e3).toFixed(2) + ' KB';
-  return n + ' B';
+/**
+ * SQLite / legacy API values are often UTC as "YYYY-MM-DD HH:MM:SS" or "…T…" without Z.
+ * ECMAScript parses those as *local* wall time, so the Control Panel lags Telegram by your
+ * UTC offset. Treat bare SQL-like strings as UTC (same rule as server sqliteUtcStringToIsoZ).
+ */
+function parseUtcTimestampForDisplay(s) {
+  const t = String(s ?? '').trim();
+  if (!t) return null;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(t) && (/[zZ]|[+-]\d{2}:?\d{2}/.test(t))) {
+    const d = new Date(t);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const bare = t.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)(?:\.(\d{1,9}))?/);
+  if (bare) {
+    const frac = bare[3] ? `.${String(bare[3]).padEnd(3, '0').slice(0, 3)}` : '';
+    const d = new Date(`${bare[1]}T${bare[2]}${frac}Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatChatTimestampLocal(s) {
+  const d = parseUtcTimestampForDisplay(s);
+  return d ? d.toLocaleString() : '';
 }
 
 function updateProviderVisibility() {
   const p = $('llmProvider').value;
   $('wrapOllama').classList.toggle('hidden', p !== 'ollama');
   $('wrapLlama').classList.toggle('hidden', p !== 'llama-server');
+  $('wrapOpenAi')?.classList.toggle('hidden', p !== 'openai');
+  $('wrapGemini')?.classList.toggle('hidden', p !== 'gemini');
   const wrapSrv = $('wrapServerActions');
   if (wrapSrv) wrapSrv.classList.toggle('hidden', p !== 'llama-server');
 }
 
 const CHAT_SESSION_STORAGE_KEY = 'guiChatSessionUserId';
+/** Pixels from bottom: if user is within this, treat as "following" the thread (auto-refresh scrolls down). */
+const CHAT_STICK_BOTTOM_THRESHOLD_PX = 120;
+let lastChatLoadedUserId = null;
+
+let syncingWebSearchInputs = false;
+let webSearchSaving = false;
+
+function webSearchToggleInputs() {
+  return [$('webSearchEnabled'), $('overviewWebSearch')].filter(Boolean);
+}
+
+function setWebSearchInputsChecked(checked) {
+  syncingWebSearchInputs = true;
+  for (const el of webSearchToggleInputs()) {
+    el.checked = Boolean(checked);
+  }
+  syncingWebSearchInputs = false;
+}
+
+async function persistWebSearchSetting(checked) {
+  if (webSearchSaving) return;
+  webSearchSaving = true;
+  setStatus('Saving web search…', '');
+  try {
+    const r = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webSearchEnabled: checked }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Save failed');
+    const st = j.settings || {};
+    setWebSearchInputsChecked(Boolean(st.webSearchEnabled));
+    setStatus('Web search saved.', 'ok');
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Web search save: ' + e.message);
+    await loadSettingsIntoForm();
+  } finally {
+    webSearchSaving = false;
+  }
+}
+
+function wireWebSearchToggles() {
+  for (const el of webSearchToggleInputs()) {
+    el?.addEventListener('change', () => {
+      if (syncingWebSearchInputs) return;
+      const on = el.checked;
+      for (const x of webSearchToggleInputs()) {
+        if (x !== el) x.checked = on;
+      }
+      persistWebSearchSetting(on).catch(() => {});
+    });
+  }
+}
 
 async function loadSettingsIntoForm() {
   const r = await fetch('/api/settings');
   if (!r.ok) throw new Error('Failed to load settings');
   const s = await r.json();
+  lastSettingsForGui = s;
 
   $('projectRoot').textContent = s.projectRoot || '';
 
@@ -64,8 +165,29 @@ async function loadSettingsIntoForm() {
   $('allowedUserIds').value = s.allowedUserIds || '';
   $('ollamaBaseUrl').value = s.ollamaBaseUrl || 'http://127.0.0.1:11434';
   $('llamaServerUrl').value = s.llamaServerUrl || 'http://127.0.0.1:8080';
-  $('llmProvider').value = s.llmProvider === 'llama-server' ? 'llama-server' : 'ollama';
+  const prov = String(s.llmProvider || '').toLowerCase();
+  const allowed = ['ollama', 'llama-server', 'openai', 'gemini'];
+  $('llmProvider').value = allowed.includes(prov) ? prov : 'llama-server';
   updateProviderVisibility();
+
+  if ($('openaiApiKey')) $('openaiApiKey').value = '';
+  if ($('geminiApiKey')) $('geminiApiKey').value = '';
+  const oHint = $('openaiKeyHint');
+  if (oHint) {
+    if (s.hasOpenAiKey && s.openaiApiKeyMasked) {
+      oHint.textContent = `Key active (ends ${s.openaiApiKeyMasked.slice(-4)}) — paste to replace.`;
+    } else {
+      oHint.textContent = 'Create a key at platform.openai.com → API keys.';
+    }
+  }
+  const gHint = $('geminiKeyHint');
+  if (gHint) {
+    if (s.hasGeminiKey && s.geminiApiKeyMasked) {
+      gHint.textContent = `Key active (ends ${s.geminiApiKeyMasked.slice(-4)}) — paste to replace.`;
+    } else {
+      gHint.textContent = 'Create a key in Google AI Studio (link above).';
+    }
+  }
 
   $('guiPort').value = s.guiPort || 3847;
   $('logLevel').value = s.logLevel || 'info';
@@ -73,12 +195,9 @@ async function loadSettingsIntoForm() {
   $('maxBrowsePages').value = s.maxBrowsePages ?? 2;
   $('databasePath').value = s.databasePath || '';
   $('databasePathResolved').textContent = s.databasePathResolved || '';
-  $('modelsDir').value = s.modelsDirInput || 'models';
-  $('modelsDirResolved').textContent = s.modelsDir || '';
-  $('engineDir').value = s.engineDirInput || 'engine';
-  $('engineDirResolved').textContent = s.engineDir || '';
   $('openBrowserGui').checked = Boolean(s.openBrowserGui);
   if ($('autoStartLlamaServer')) $('autoStartLlamaServer').checked = Boolean(s.autoStartLlamaServer);
+  setWebSearchInputsChecked(Boolean(s.webSearchEnabled));
   $('settingsPath').textContent = s.settingsPath || '';
 
   const hint = $('tokenHint');
@@ -88,65 +207,60 @@ async function loadSettingsIntoForm() {
     hint.textContent = 'Paste token from @BotFather.';
   }
 
-  const ggufEl = $('ggufList');
-  $('ggufError').textContent = s.ggufError || '';
-  if (s.ggufFiles && s.ggufFiles.length) {
-    ggufEl.innerHTML =
-      '<ul>' +
-      s.ggufFiles
-        .map(
-          (f) =>
-            `<li><strong>${escapeHtml(f.name)}</strong> — ${fmtSize(f.sizeBytes)}</li>`
-        )
-        .join('') +
-      '</ul>';
+  await refreshModelDropdown(String(s.llmModel || '').trim(), { resetSelection: false });
+
+  const onMemory = $('panel-data')?.classList.contains('active');
+  if (onMemory && $('memSessionSelect')) {
+    loadSoulForCurrentMemSession().catch(() => {});
   } else {
-    ggufEl.innerHTML = '<p class="hint">No .gguf files in folder.</p>';
+    applyBotPersonaFieldsToForm(s.botPersona || {});
+    applyMemAddressFieldsFromSettings(s.botPersona || {});
   }
-
-  const uiModel = $('llmModel')?.value?.trim() || '';
-  await refreshModelDropdown(uiModel || s.llmModel || '');
-
-  const bp = s.botPersona || {};
-  if ($('botDisplayName')) $('botDisplayName').value = bp.displayName || '';
-  if ($('botGender')) {
-    const g = String(bp.gender || '').trim().toLowerCase();
-    if (g === 'male' || g === 'm') $('botGender').value = 'Male';
-    else if (g === 'female' || g === 'f') $('botGender').value = 'Female';
-    else if (bp.gender === 'Male' || bp.gender === 'Female') $('botGender').value = bp.gender;
-    else $('botGender').value = '';
-  }
-  if ($('botStyle')) $('botStyle').value = bp.style || '';
-  if ($('botRole')) $('botRole').value = bp.role || '';
-  if ($('botAddressUserEn')) $('botAddressUserEn').value = bp.addressUserEn || '';
-  if ($('botAddressUserMy')) $('botAddressUserMy').value = bp.addressUserMy || '';
 }
 
-async function refreshModelDropdown(selected) {
-  const hint = $('catalogHint');
-  hint.textContent = 'Loading model list…';
+function catalogQueryForUiBackend() {
+  const p = $('llmProvider')?.value?.trim();
+  if (!p) return '';
+  return `?llmProvider=${encodeURIComponent(p)}`;
+}
+
+/**
+ * @param {string} selected Preferred model id when not resetting (e.g. saved settings).
+ * @param {{ resetSelection?: boolean }} [opts] If true, only the placeholder is selected after load.
+ * @returns {Promise<boolean>}
+ */
+async function refreshModelDropdown(selected, opts = {}) {
+  const resetSelection = Boolean(opts.resetSelection);
   try {
-    const r = await fetch('/api/llm/catalog');
+    const r = await fetch('/api/llm/catalog' + catalogQueryForUiBackend());
     const c = await r.json();
     if (!r.ok) throw new Error(c.error || 'catalog failed');
 
     const sel = $('llmModel');
-    const opts = c.options || [];
+    const optsList = c.options || [];
     sel.innerHTML = '';
-    if (!opts.length) {
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Select AI model';
+    sel.appendChild(ph);
+
+    for (const opt of optsList) {
+      const id = String(opt.id || '').trim();
+      if (!id) continue;
       const o = document.createElement('option');
-      o.value = selected || 'default';
-      o.textContent = selected || '(type model name)';
+      o.value = id;
+      o.textContent = opt.label || id;
       sel.appendChild(o);
-    } else {
-      for (const opt of opts) {
-        const o = document.createElement('option');
-        o.value = opt.id;
-        o.textContent = opt.label || opt.id;
-        sel.appendChild(o);
-      }
     }
-    const want = selected || c.selectedModel || '';
+
+    if (resetSelection) {
+      sel.value = '';
+      return true;
+    }
+
+    const want =
+      (selected != null && String(selected).trim() !== '' ? String(selected).trim() : '') ||
+      String(c.selectedModel || '').trim();
     if (want && [...sel.options].some((x) => x.value === want)) {
       sel.value = want;
     } else if (want) {
@@ -155,15 +269,13 @@ async function refreshModelDropdown(selected) {
       o.textContent = want + ' (custom)';
       sel.appendChild(o);
       sel.value = want;
+    } else {
+      sel.value = '';
     }
-
-    const parts = [];
-    parts.push(`Backend: ${c.provider}`);
-    if (c.remoteOk) parts.push('Remote API: OK');
-    else parts.push(`Remote API: ${c.remoteError || 'unreachable'}`);
-    hint.textContent = parts.join(' · ');
+    return true;
   } catch (e) {
-    hint.textContent = 'Could not load catalog: ' + e.message;
+    setStatus('Model list: ' + e.message, 'err');
+    return false;
   }
 }
 
@@ -177,11 +289,23 @@ function showTab(name) {
   if (name === 'overview') {
     loadOverview();
     startOverviewHardwarePolling();
+    startOverviewClock();
   } else {
     stopOverviewHardwarePolling();
+    stopOverviewClock();
   }
   if (name === 'access') loadAccess();
-  if (name === 'data') loadDataTab().catch((e) => setStatus(e.message, 'err'));
+  if (name === 'data') {
+    let sub = 'bot';
+    try {
+      const v = localStorage.getItem(MEMORY_SUBTAB_KEY);
+      if (v === 'bot' || v === 'session' || v === 'souls') sub = v;
+    } catch {
+      /* ignore */
+    }
+    setMemorySubtab(sub);
+    loadDataTab().catch((e) => setStatus(e.message, 'err'));
+  }
   if (name === 'chat') loadChat();
   if (name === 'calendar') loadCalendar();
   if (name === 'pending') loadPending();
@@ -209,6 +333,8 @@ function setStatusLed(el, state) {
 function formatLlmBackendLabel(provider) {
   const p = String(provider || '').toLowerCase();
   if (p === 'llama-server') return 'llama.cpp server (OpenAI API)';
+  if (p === 'openai') return 'OpenAI (cloud)';
+  if (p === 'gemini') return 'Google Gemini (cloud)';
   return 'Ollama';
 }
 
@@ -344,6 +470,7 @@ let hardwareHistCpu = [];
 let hardwareHistRam = [];
 let hardwareHistGpu = [];
 let hardwareChartTimer = null;
+let overviewClockTimer = null;
 
 function clearHardwareHistory() {
   hardwareHistCpu = [];
@@ -501,6 +628,55 @@ function stopOverviewHardwarePolling() {
   }
 }
 
+function formatUtcOffsetForDate(d) {
+  const totalMin = -d.getTimezoneOffset();
+  const sign = totalMin >= 0 ? '+' : '-';
+  const abs = Math.abs(totalMin);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  let s = `UTC${sign}${h}`;
+  if (m) s += ':' + String(m).padStart(2, '0');
+  return s;
+}
+
+function tickOverviewClock() {
+  const line = $('overviewClockLine');
+  const sub = $('overviewClockTz');
+  if (!line) return;
+  const d = new Date();
+  line.textContent = d.toLocaleString(undefined, {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  if (sub) {
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'long' }).formatToParts(d);
+      const tzName = parts.find((p) => p.type === 'timeZoneName')?.value || '';
+      sub.textContent = [tzName, formatUtcOffsetForDate(d)].filter(Boolean).join(' · ');
+    } catch {
+      sub.textContent = formatUtcOffsetForDate(d);
+    }
+  }
+}
+
+function stopOverviewClock() {
+  if (overviewClockTimer) {
+    clearInterval(overviewClockTimer);
+    overviewClockTimer = null;
+  }
+}
+
+function startOverviewClock() {
+  stopOverviewClock();
+  tickOverviewClock();
+  overviewClockTimer = setInterval(tickOverviewClock, 1000);
+}
+
 function startOverviewHardwarePolling() {
   stopOverviewHardwarePolling();
   clearHardwareHistory();
@@ -514,21 +690,12 @@ async function loadOverview() {
     const settings = await (await fetch('/api/settings')).json();
     const display = String(settings.botPersona?.displayName || '').trim();
     const nameEl = $('overviewBotName');
-    const cardName = $('overviewCardBotName');
     if (nameEl) {
       nameEl.textContent = display || '—';
-    }
-    if (cardName) {
-      cardName.classList.toggle('status-card-active', Boolean(display));
     }
 
     const backEl = $('overviewLlmBackend');
     if (backEl) backEl.textContent = formatLlmBackendLabel(settings.llmProvider);
-    const llamaUrlEl = $('overviewLlamaServerUrl');
-    if (llamaUrlEl) {
-      const u = String(settings.llamaServerUrl || '').trim();
-      llamaUrlEl.textContent = u || '—';
-    }
     const modelEl = $('overviewActiveModel');
     if (modelEl) {
       const m = String(settings.llmModel || '').trim();
@@ -536,13 +703,9 @@ async function loadOverview() {
     }
   } catch {
     const nameEl = $('overviewBotName');
-    const cardName = $('overviewCardBotName');
     if (nameEl) nameEl.textContent = '—';
-    cardName?.classList.remove('status-card-active');
     const backEl = $('overviewLlmBackend');
     if (backEl) backEl.textContent = '—';
-    const llamaUrlEl = $('overviewLlamaServerUrl');
-    if (llamaUrlEl) llamaUrlEl.textContent = '—';
     const modelEl = $('overviewActiveModel');
     if (modelEl) modelEl.textContent = '—';
   }
@@ -552,25 +715,19 @@ async function loadOverview() {
     const running = Boolean(st.running);
     const starting = Boolean(st.starting);
     const line = $('overviewTelegramLine');
-    const card = $('overviewCardTelegram');
     if (line) {
       line.textContent = running ? 'Running' : starting ? 'Starting…' : 'Stopped';
     }
     if (running) {
       setStatusLed($('overviewTelegramLed'), 'live');
-      card?.classList.add('status-card-active');
     } else if (starting) {
       setStatusLed($('overviewTelegramLed'), 'warn');
-      card?.classList.add('status-card-active');
     } else {
       setStatusLed($('overviewTelegramLed'), 'idle');
-      card?.classList.remove('status-card-active');
     }
   } catch {
     const line = $('overviewTelegramLine');
-    const card = $('overviewCardTelegram');
     if (line) line.textContent = '?';
-    card?.classList.remove('status-card-active');
     setStatusLed($('overviewTelegramLed'), 'unknown');
   }
 
@@ -581,7 +738,6 @@ async function loadOverview() {
     const spawned = Boolean(ss.spawnedByApp);
     const lineEl = $('overviewServerLine');
     const subEl = $('overviewServerDetail');
-    const cardS = $('overviewCardServer');
 
     if (lineEl) {
       lineEl.textContent = online ? 'Online' : 'Offline';
@@ -592,18 +748,14 @@ async function loadOverview() {
     }
     if (online) {
       setStatusLed($('overviewServerLed'), 'live');
-      cardS?.classList.add('status-card-active');
     } else {
       setStatusLed($('overviewServerLed'), 'idle');
-      cardS?.classList.remove('status-card-active');
     }
   } catch {
     const lineEl = $('overviewServerLine');
     const subEl = $('overviewServerDetail');
-    const cardS = $('overviewCardServer');
     if (lineEl) lineEl.textContent = '?';
     if (subEl) subEl.textContent = '';
-    cardS?.classList.remove('status-card-active');
     setStatusLed($('overviewServerLed'), 'unknown');
   }
 
@@ -728,12 +880,60 @@ function applySoulToMemForm(soul) {
   if (!$('memDisplayName')) return;
   $('memDisplayName').value = soul.display_name || '';
   const prof = (soul.preferences && soul.preferences.profile) || {};
+  const legacyBp =
+    soul.preferences?.botPersona && typeof soul.preferences.botPersona === 'object'
+      ? soul.preferences.botPersona
+      : {};
+  const addrEn = String(prof.addressUserEn ?? legacyBp.addressUserEn ?? '').trim();
+  const addrMy = String(prof.addressUserMy ?? legacyBp.addressUserMy ?? '').trim();
   $('memWhoAmI').value = prof.whoAmI || '';
   $('memWork').value = prof.work || '';
   if ($('memGender')) $('memGender').value = mapProfileGenderToSelect(prof.gender);
   if ($('memAge')) $('memAge').value = mapProfileAgeToSelect(prof.age);
+  if ($('memAddressUserEn')) $('memAddressUserEn').value = addrEn;
+  if ($('memAddressUserMy')) $('memAddressUserMy').value = addrMy;
   $('memExtra').value = prof.extra || '';
   if ($('memMemorySummary')) $('memMemorySummary').value = prof.memorySummary || '';
+}
+
+function getGlobalBotPersonaFromCache() {
+  const bp = lastSettingsForGui?.botPersona;
+  return bp && typeof bp === 'object' ? bp : {};
+}
+
+function mergeBotPersonaForMemForm(soul) {
+  const g = getGlobalBotPersonaFromCache();
+  const l =
+    soul.preferences?.botPersona && typeof soul.preferences.botPersona === 'object'
+      ? soul.preferences.botPersona
+      : {};
+  const keys = ['displayName', 'gender', 'style', 'role'];
+  const out = { ...g };
+  for (const k of keys) {
+    const v = l[k];
+    if (typeof v === 'string' && v.trim() !== '') out[k] = v.trim();
+  }
+  return out;
+}
+
+function applyBotPersonaFieldsToForm(bp) {
+  const p = bp || {};
+  if ($('botDisplayName')) $('botDisplayName').value = p.displayName || '';
+  if ($('botGender')) {
+    const g = String(p.gender || '').trim().toLowerCase();
+    if (g === 'male' || g === 'm') $('botGender').value = 'Male';
+    else if (g === 'female' || g === 'f') $('botGender').value = 'Female';
+    else if (p.gender === 'Male' || p.gender === 'Female') $('botGender').value = p.gender;
+    else $('botGender').value = '';
+  }
+  if ($('botStyle')) $('botStyle').value = p.style || '';
+  if ($('botRole')) $('botRole').value = p.role || '';
+}
+
+function applyMemAddressFieldsFromSettings(bp) {
+  const p = bp || {};
+  if ($('memAddressUserEn')) $('memAddressUserEn').value = p.addressUserEn || '';
+  if ($('memAddressUserMy')) $('memAddressUserMy').value = p.addressUserMy || '';
 }
 
 async function loadMemorySessionsIntoSelects() {
@@ -742,11 +942,14 @@ async function loadMemorySessionsIntoSelects() {
   const sessions = d.sessions || [];
   const memSel = $('memSessionSelect');
   const copySel = $('memCopyFromSelect');
+  const copyBotSel = $('memCopyBotFromSelect');
   if (!memSel || !copySel) return;
   const prevMem = memSel.value;
   const prevCopy = copySel.value;
+  const prevBotCopy = copyBotSel?.value;
   memSel.innerHTML = '';
   copySel.innerHTML = '<option value="">Select source session…</option>';
+  if (copyBotSel) copyBotSel.innerHTML = '<option value="">Select source session…</option>';
   for (const s of sessions) {
     const o = document.createElement('option');
     o.value = String(s.userId);
@@ -756,9 +959,35 @@ async function loadMemorySessionsIntoSelects() {
     c.value = String(s.userId);
     c.textContent = `${s.label} · ${s.userId}`;
     copySel.appendChild(c);
+    if (copyBotSel) {
+      const b = document.createElement('option');
+      b.value = String(s.userId);
+      b.textContent = `${s.label} · ${s.userId}`;
+      copyBotSel.appendChild(b);
+    }
   }
-  if (prevMem && [...memSel.options].some((x) => x.value === prevMem)) memSel.value = prevMem;
+  if (prevMem && [...memSel.options].some((x) => x.value === prevMem)) {
+    memSel.value = prevMem;
+  } else {
+    const guiId = getGuiConsoleUserIdFromData(d);
+    let saved = '';
+    try {
+      saved = localStorage.getItem(CHAT_SESSION_STORAGE_KEY) || '';
+    } catch {
+      /* ignore */
+    }
+    const pick =
+      (saved && [...memSel.options].some((x) => x.value === saved) && saved) || String(guiId);
+    memSel.value = [...memSel.options].some((x) => x.value === pick) ? pick : memSel.options[0]?.value || '';
+  }
   if (prevCopy && [...copySel.options].some((x) => x.value === prevCopy)) copySel.value = prevCopy;
+  if (
+    copyBotSel &&
+    prevBotCopy &&
+    [...copyBotSel.options].some((x) => x.value === prevBotCopy)
+  ) {
+    copyBotSel.value = prevBotCopy;
+  }
 }
 
 async function loadSoulForCurrentMemSession() {
@@ -768,6 +997,7 @@ async function loadSoulForCurrentMemSession() {
   const soul = await r.json();
   if (soul.error) throw new Error(soul.error);
   applySoulToMemForm(soul);
+  applyBotPersonaFieldsToForm(mergeBotPersonaForMemForm(soul));
 }
 
 async function loadDataTab() {
@@ -814,19 +1044,27 @@ function buildSessionSelect(sessionsPayload) {
   return guiId;
 }
 
-function renderChatThread(messages) {
+function renderChatThread(messages, scrollOpts = {}) {
+  const { forceBottom = false } = scrollOpts;
   const thread = $('chatThread');
   if (!thread) return;
   const list = messages || [];
   if (!list.length) {
     thread.innerHTML = '<p class="hint chat-empty">No messages in this session yet.</p>';
+    thread.scrollTop = 0;
     return;
   }
+  const prevTop = thread.scrollTop;
+  const prevHeight = thread.scrollHeight;
+  const prevClient = thread.clientHeight;
+  const distFromBottom = prevHeight - prevTop - prevClient;
+  const wasNearBottom = distFromBottom < CHAT_STICK_BOTTOM_THRESHOLD_PX;
+
   const parts = [];
   for (const m of list) {
     const role = String(m.role || '').toLowerCase();
     if (role === 'system') continue;
-    const t = m.created_at ? new Date(m.created_at).toLocaleString() : '';
+    const t = m.created_at ? formatChatTimestampLocal(m.created_at) : '';
     const cls = role === 'user' ? 'chat-bubble chat-bubble-user' : 'chat-bubble chat-bubble-assistant';
     const who = role === 'user' ? 'You' : 'Assistant';
     parts.push(
@@ -836,21 +1074,30 @@ function renderChatThread(messages) {
     );
   }
   thread.innerHTML = parts.join('');
-  thread.scrollTop = thread.scrollHeight;
+
+  if (forceBottom || wasNearBottom) {
+    thread.scrollTop = thread.scrollHeight;
+  } else {
+    const maxScroll = Math.max(0, thread.scrollHeight - thread.clientHeight);
+    thread.scrollTop = Math.min(Math.max(0, prevTop), maxScroll);
+  }
 }
 
-async function loadChat() {
+async function loadChat(opts = {}) {
   const limit = $('chatLimit')?.value || '100';
   const sess = await fetch('/api/chat/sessions').then((r) => r.json());
   if (sess.error) throw new Error(sess.error);
   buildSessionSelect(sess);
   const activeUid = Number($('chatSessionSelect')?.value);
+  const sessionChanged = lastChatLoadedUserId !== activeUid;
+  const forceBottom = Boolean(opts.forceBottom) || sessionChanged;
   localStorage.setItem(CHAT_SESSION_STORAGE_KEY, String(activeUid));
   const q = new URLSearchParams({ limit });
   q.set('userId', String(activeUid));
   const data = await fetch('/api/chat?' + q.toString()).then((r) => r.json());
   if (data.error) throw new Error(data.error);
-  renderChatThread(data.messages || []);
+  renderChatThread(data.messages || [], { forceBottom });
+  lastChatLoadedUserId = activeUid;
 }
 
 async function sendChatFromGui() {
@@ -878,11 +1125,11 @@ async function sendChatFromGui() {
       logLine('Assistant asked for Yes/No — type Yes or No in the chat box.');
     }
     setStatus('Sent.', 'ok');
-    await loadChat();
+    await loadChat({ forceBottom: true });
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Chat: ' + e.message);
-    await loadChat().catch(() => {});
+    await loadChat({ forceBottom: true }).catch(() => {});
   } finally {
     input.disabled = false;
     input.focus();
@@ -894,9 +1141,10 @@ async function loadCalendar() {
   const d = await r.json();
   const rows = (d.events || []).map((e) => {
     const when = e.starts_at ? new Date(e.starts_at).toLocaleString() : '';
-    return `<tr><td>${escapeHtml(when)}</td><td>${e.user_id}</td><td class="msg">${escapeHtml(e.title)}</td></tr>`;
+    const id = Number(e.id);
+    return `<tr><td>${escapeHtml(when)}</td><td>${e.user_id}</td><td class="msg">${escapeHtml(e.title)}</td><td class="nowrap"><button type="button" class="btn-mini danger" data-cal-delete="${Number.isFinite(id) ? id : ''}">Delete</button></td></tr>`;
   });
-  $('calBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="3" class="hint">No events.</td></tr>';
+  $('calBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="hint">No events.</td></tr>';
 }
 
 async function loadPending() {
@@ -905,13 +1153,16 @@ async function loadPending() {
   const rows = (d.pending || []).map((p) => {
     const payload =
       typeof p.payload === 'object' ? JSON.stringify(p.payload) : String(p.payload || '');
+    const uid = Number(p.user_id);
     return `<tr><td>${p.user_id}</td><td>${escapeHtml(p.kind)}</td><td class="msg">${escapeHtml(payload)}</td><td>${escapeHtml(
       p.created_at || ''
-    )}</td></tr>`;
+    )}</td><td class="nowrap"><button type="button" class="btn-mini danger" data-pending-delete="${
+      Number.isFinite(uid) ? uid : ''
+    }">Delete</button></td></tr>`;
   });
   $('pendingBody').innerHTML = rows.length
     ? rows.join('')
-    : '<tr><td colspan="4" class="hint">None.</td></tr>';
+    : '<tr><td colspan="5" class="hint">None.</td></tr>';
 }
 
 async function saveAll() {
@@ -928,13 +1179,16 @@ async function saveAll() {
       browserTimeoutMs: $('browserTimeoutMs').value,
       maxBrowsePages: $('maxBrowsePages').value,
       databasePath: $('databasePath').value.trim(),
-      modelsDir: $('modelsDir').value.trim(),
-      engineDir: $('engineDir').value.trim(),
       openBrowserGui: $('openBrowserGui').checked,
       autoStartLlamaServer: $('autoStartLlamaServer') ? $('autoStartLlamaServer').checked : false,
+      webSearchEnabled: $('webSearchEnabled') ? $('webSearchEnabled').checked : false,
     };
     const tok = $('telegramBotToken').value.trim();
     if (tok) body.telegramBotToken = tok;
+    const oa = $('openaiApiKey')?.value?.trim() || '';
+    if (oa) body.openaiApiKey = oa;
+    const gm = $('geminiApiKey')?.value?.trim() || '';
+    if (gm) body.geminiApiKey = gm;
     const r = await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -967,12 +1221,40 @@ $('navSettingsToggle')?.addEventListener('click', (e) => {
 
 $('llmProvider').addEventListener('change', () => {
   updateProviderVisibility();
-  refreshModelDropdown($('llmModel').value);
+  refreshModelDropdown('', { resetSelection: true }).catch(() => {});
 });
 
-$('btnRefreshModels').addEventListener('click', () => refreshModelDropdown($('llmModel').value));
+$('btnRefreshModels').addEventListener('click', () => {
+  const cur = $('llmModel')?.value?.trim() || '';
+  refreshModelDropdown(cur, { resetSelection: false });
+});
 
 $('btnSave').addEventListener('click', saveAll);
+
+wireWebSearchToggles();
+
+$('btnResetTelegram')?.addEventListener('click', async () => {
+  const sure = window.confirm(
+    'Reset Telegram setup?\n\n' +
+      'This removes the saved bot token and legacy auto-approve IDs from data/settings.json, clears pending/approved/blocked users in the database, and stops the bot if it is running. Chat history and memory are not removed.\n\n' +
+      'If your token is only in .env, edit or remove TELEGRAM_BOT_TOKEN / ALLOWED_USER_IDS there yourself.'
+  );
+  if (!sure) return;
+  setStatus('Resetting Telegram…', '');
+  try {
+    const r = await fetch('/api/settings/reset-telegram', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Reset failed');
+    logLine('Telegram setup reset (saved token cleared, access list cleared).');
+    setStatus('Telegram setup reset.', 'ok');
+    await loadSettingsIntoForm();
+    await loadOverview();
+    await loadAccess();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Reset Telegram: ' + e.message);
+  }
+});
 
 $('btnStart').addEventListener('click', async () => {
   setStatus('Starting…', '');
@@ -1039,17 +1321,50 @@ $('btnRefreshSouls').addEventListener('click', () => loadDataTab().catch((e) => 
 
 if ($('btnSaveBotPersona')) {
   $('btnSaveBotPersona').addEventListener('click', async () => {
-    setStatus('Saving Bot Personal…', '');
+    const uid = Number($('memSessionSelect')?.value);
+    if (!Number.isFinite(uid)) {
+      setStatus('Pick a session.', 'err');
+      return;
+    }
+    setStatus('Saving assistant for this session…', '');
+    try {
+      const botPersona = {
+        displayName: $('botDisplayName').value.trim(),
+        gender: $('botGender') ? $('botGender').value.trim() : '',
+        style: $('botStyle').value.trim(),
+        role: $('botRole').value.trim(),
+      };
+      const r = await fetch(`/api/soul/${uid}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botPersona }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Save failed');
+      logLine(`Assistant identity saved for session ${uid}.`);
+      setStatus('Assistant identity saved for this session.', 'ok');
+      await loadSoulForCurrentMemSession();
+      await loadSouls();
+    } catch (e) {
+      setStatus(e.message, 'err');
+      logLine('Session bot persona: ' + e.message);
+    }
+  });
+}
+
+if ($('btnSaveBotPersonaGlobal')) {
+  $('btnSaveBotPersonaGlobal').addEventListener('click', async () => {
+    setStatus('Saving global assistant defaults…', '');
     try {
       const body = {
-        llmModel: $('llmModel').value.trim(),
+        llmModel: $('llmModel')?.value?.trim() || '',
         botPersona: {
           displayName: $('botDisplayName').value.trim(),
           gender: $('botGender') ? $('botGender').value.trim() : '',
           style: $('botStyle').value.trim(),
           role: $('botRole').value.trim(),
-          addressUserEn: $('botAddressUserEn').value.trim(),
-          addressUserMy: $('botAddressUserMy').value.trim(),
+          addressUserEn: $('memAddressUserEn')?.value?.trim() || '',
+          addressUserMy: $('memAddressUserMy')?.value?.trim() || '',
         },
       };
       const r = await fetch('/api/settings', {
@@ -1059,25 +1374,68 @@ if ($('btnSaveBotPersona')) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Save failed');
-      logLine('Bot Personal saved.');
-      setStatus('Bot Personal saved.', 'ok');
+      logLine('Global bot persona saved to settings.json.');
+      setStatus('Global assistant defaults saved.', 'ok');
       await loadSettingsIntoForm();
     } catch (e) {
       setStatus(e.message, 'err');
-      logLine('Bot Personal: ' + e.message);
+      logLine('Global bot persona: ' + e.message);
     }
   });
 }
 
-if ($('memSessionSelect')) {
-  $('memSessionSelect').addEventListener('change', () => {
-    loadSoulForCurrentMemSession().catch((e) => setStatus(e.message, 'err'));
+if ($('btnCopyBotPersona')) {
+  $('btnCopyBotPersona').addEventListener('click', async () => {
+    const to = Number($('memSessionSelect')?.value);
+    const from = Number($('memCopyBotFromSelect')?.value);
+    if (!Number.isFinite(to)) {
+      setStatus('Pick a session.', 'err');
+      return;
+    }
+    if (!Number.isFinite(from)) {
+      setStatus('Pick a source session for assistant identity.', 'err');
+      return;
+    }
+    if (from === to) {
+      setStatus('Source and target session must differ.', 'err');
+      return;
+    }
+    setStatus('Copying assistant identity…', '');
+    try {
+      const r = await fetch('/api/soul/copy-bot-persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromUserId: from, toUserId: to }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Copy failed');
+      logLine(`Copied assistant identity ${from} → ${to}.`);
+      setStatus('Assistant identity copied into current session.', 'ok');
+      await loadSoulForCurrentMemSession();
+      await loadSouls();
+    } catch (e) {
+      setStatus(e.message, 'err');
+      logLine('Copy bot persona: ' + e.message);
+    }
   });
 }
-if ($('btnMemReload')) {
-  $('btnMemReload').addEventListener('click', () =>
-    loadDataTab().catch((e) => setStatus(e.message, 'err'))
-  );
+
+$('panel-data')?.addEventListener('click', (ev) => {
+  const tab = ev.target.closest('.mem-stab-link');
+  if (!tab || !tab.dataset.memSub) return;
+  ev.preventDefault();
+  setMemorySubtab(tab.dataset.memSub);
+});
+
+if ($('memSessionSelect')) {
+  $('memSessionSelect').addEventListener('change', () => {
+    try {
+      localStorage.setItem(CHAT_SESSION_STORAGE_KEY, $('memSessionSelect').value);
+    } catch {
+      /* ignore */
+    }
+    loadSoulForCurrentMemSession().catch((e) => setStatus(e.message, 'err'));
+  });
 }
 if ($('btnSaveMemSession')) {
   $('btnSaveMemSession').addEventListener('click', async () => {
@@ -1097,6 +1455,8 @@ if ($('btnSaveMemSession')) {
           age: $('memAge') ? $('memAge').value.trim() : '',
           extra: $('memExtra').value.trim(),
           memorySummary: $('memMemorySummary') ? $('memMemorySummary').value.trim() : '',
+          addressUserEn: $('memAddressUserEn') ? $('memAddressUserEn').value.trim() : '',
+          addressUserMy: $('memAddressUserMy') ? $('memAddressUserMy').value.trim() : '',
         },
       };
       const r = await fetch(`/api/soul/${uid}`, {
@@ -1204,8 +1564,56 @@ if ($('btnCopyMemSession')) {
 }
 $('btnRefreshCal').addEventListener('click', () => loadCalendar().catch(() => {}));
 $('btnRefreshPending').addEventListener('click', () => loadPending().catch(() => {}));
+
+$('panel-calendar')?.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('[data-cal-delete]');
+  if (!btn) return;
+  const id = Number(btn.getAttribute('data-cal-delete'));
+  if (!Number.isFinite(id) || id < 1) return;
+  if (!window.confirm('Delete this calendar event?')) return;
+  setStatus('Deleting…', '');
+  try {
+    const r = await fetch('/api/data/calendar/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Delete failed');
+    logLine(`Calendar event ${id} deleted.`);
+    setStatus('Event deleted.', 'ok');
+    await loadCalendar();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Calendar delete: ' + e.message);
+  }
+});
+
+$('panel-pending')?.addEventListener('click', async (ev) => {
+  const btn = ev.target.closest('[data-pending-delete]');
+  if (!btn) return;
+  const userId = Number(btn.getAttribute('data-pending-delete'));
+  if (!Number.isFinite(userId)) return;
+  if (!window.confirm(`Remove pending confirmation for user ${userId}?`)) return;
+  setStatus('Deleting…', '');
+  try {
+    const r = await fetch('/api/data/pending/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Delete failed');
+    logLine(`Pending row for user ${userId} removed.`);
+    setStatus('Pending removed.', 'ok');
+    await loadPending();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Pending delete: ' + e.message);
+  }
+});
 $('btnRefreshAccess').addEventListener('click', () => loadAccess().catch((e) => setStatus(e.message, 'err')));
-$('chatLimit').addEventListener('change', () => loadChat().catch(() => {}));
+$('chatLimit').addEventListener('change', () => loadChat({ forceBottom: true }).catch(() => {}));
 if ($('chatSessionSelect')) {
   $('chatSessionSelect').addEventListener('change', () => {
     localStorage.setItem(CHAT_SESSION_STORAGE_KEY, $('chatSessionSelect').value);

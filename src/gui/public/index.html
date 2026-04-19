@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Audiowide&amp;display=swap"
+      href="https://fonts.googleapis.com/css2?family=Audiowide&amp;family=Open+Sans:wght@600;700&amp;display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/styles.css" />
@@ -31,7 +31,7 @@
           </div>
           <div class="brand-tagline">Smart Engine for Notes &amp; Action</div>
         </div>
-        <nav class="nav" id="mainNav">
+        <nav class="nav sidebar-nav-panel" id="mainNav">
           <button type="button" class="nav-item active" data-tab="overview">
             <img class="nav-icon" src="/nav-icons/overview.svg" width="22" height="22" alt="" />
             <span class="nav-item-label">Overview</span>
@@ -62,26 +62,28 @@
               </span>
             </button>
             <div class="nav-settings-sub" id="navSettingsSub">
-              <button type="button" class="nav-item nav-item-sub" data-tab="telegram">
-                <img class="nav-icon nav-icon-sub" src="/nav-icons/telegram.svg" width="20" height="20" alt="" />
-                <span class="nav-item-label">Telegram</span>
-              </button>
-              <button type="button" class="nav-item nav-item-sub" data-tab="access">
-                <img class="nav-icon nav-icon-sub" src="/nav-icons/access.svg" width="20" height="20" alt="" />
-                <span class="nav-item-label">Access</span>
-              </button>
-              <button type="button" class="nav-item nav-item-sub" data-tab="calendar">
-                <img class="nav-icon nav-icon-sub" src="/nav-icons/calendar.svg" width="20" height="20" alt="" />
-                <span class="nav-item-label">Calendar</span>
-              </button>
-              <button type="button" class="nav-item nav-item-sub" data-tab="pending">
-                <img class="nav-icon nav-icon-sub" src="/nav-icons/pending.svg" width="20" height="20" alt="" />
-                <span class="nav-item-label">Pending</span>
-              </button>
-              <button type="button" class="nav-item nav-item-sub" data-tab="system">
-                <img class="nav-icon nav-icon-sub" src="/nav-icons/system.svg" width="20" height="20" alt="" />
-                <span class="nav-item-label">System</span>
-              </button>
+              <div class="nav-settings-sub-inner">
+                <button type="button" class="nav-item nav-item-sub" data-tab="telegram">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/telegram.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Telegram</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="access">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/access.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Access</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="calendar">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/calendar.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Calendar</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="pending">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/pending.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Pending</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="system">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/system.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">System</span>
+                </button>
+              </div>
             </div>
           </div>
         </nav>
@@ -117,6 +119,13 @@
                 <span id="overviewTelegramLed" class="status-led" title="" aria-hidden="true"></span>
               </div>
               <div id="overviewTelegramLine" class="status-card-value">…</div>
+            </div>
+
+            <div class="status-card" id="overviewCardClock" title="Uses this browser’s Date — same basis as chat timestamps (toLocaleString).">
+              <div class="status-card-label">Panel time (this browser)</div>
+              <div id="overviewClockLine" class="status-card-value overview-clock-line">…</div>
+              <div id="overviewClockTz" class="status-card-sub"></div>
+              <p class="hint overview-clock-hint">Compare with your system clock; chat bubbles use the same locale and timezone.</p>
             </div>
           </div>
 
@@ -262,35 +271,86 @@
               <div id="overviewLlmBackend" class="status-card-value">…</div>
             </div>
             <div class="status-card status-card--compact">
-              <div class="status-card-label">llama-server base URL</div>
-              <div id="overviewLlamaServerUrl" class="status-card-value status-card-value-mono">…</div>
-            </div>
-            <div class="status-card status-card--compact">
               <div class="status-card-label">Active model</div>
               <div id="overviewActiveModel" class="status-card-value">…</div>
+            </div>
+            <div class="status-card status-card--compact status-card--websearch" id="overviewCardWebSearch">
+              <div class="status-card-label">Web search</div>
+              <div class="toggle-row toggle-row--neo">
+                <span class="toggle-row-text">DuckDuckGo</span>
+                <div class="neo-toggle-container" title="Saved in data/settings.json">
+                  <input
+                    class="neo-toggle-input"
+                    id="overviewWebSearch"
+                    type="checkbox"
+                    aria-label="Web search (DuckDuckGo)"
+                  />
+                  <label class="neo-toggle" for="overviewWebSearch">
+                    <div class="neo-track">
+                      <div class="neo-background-layer"></div>
+                      <div class="neo-grid-layer"></div>
+                      <div class="neo-track-highlight"></div>
+                    </div>
+                    <div class="neo-thumb">
+                      <div class="neo-thumb-ring"></div>
+                      <div class="neo-thumb-core">
+                        <div class="neo-thumb-icon">
+                          <div class="neo-thumb-wave"></div>
+                          <div class="neo-thumb-pulse"></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="neo-gesture-area"></div>
+                    <div class="neo-interaction-feedback">
+                      <div class="neo-ripple"></div>
+                      <div class="neo-progress-arc"></div>
+                    </div>
+                    <div class="neo-status">
+                      <div class="neo-status-indicator">
+                        <div class="neo-status-dot"></div>
+                        <div class="neo-status-text"></div>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </section>
 
         <section class="tab-panel" id="panel-engine">
           <h1>Engine &amp; models</h1>
-          <p class="lead">Ollama or llama.cpp <code>llama-server</code> (OpenAI API). GGUF files live under <code>models/</code>; put <code>llama-server.exe</code> in <code>engine/</code>.</p>
-
-          <div class="engine-toolbar">
-            <button type="button" id="btnSave">Save settings</button>
-            <div id="wrapServerActions" class="engine-server-actions">
-              <button type="button" id="btnStartServer">Start server</button>
-              <button type="button" id="btnStopServer">Stop server</button>
-            </div>
-          </div>
+          <p class="lead">
+            <strong>Local:</strong> Ollama or llama.cpp <code>llama-server</code> — GGUF under <code>models/</code>,
+            <code>llama-server.exe</code> in <code>engine/</code>.
+            <strong>Cloud:</strong> OpenAI (ChatGPT-compatible API) or Google Gemini — paste an API key, pick a model
+            from the list, then Save.
+          </p>
 
           <div class="card">
             <h2>Backend</h2>
             <label>LLM backend</label>
             <select id="llmProvider">
-              <option value="ollama">Ollama</option>
-              <option value="llama-server">llama.cpp server (OpenAI API)</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="llama-server">llama.cpp server — local OpenAI-compatible API</option>
+              <option value="openai">OpenAI — ChatGPT API (cloud)</option>
+              <option value="gemini">Google Gemini API (cloud)</option>
             </select>
+            <p class="hint">
+              Changing the backend reloads models and clears the Active model to <strong>Select AI model</strong> until
+              you pick one. URLs/keys still come from saved settings until you <strong>Save settings</strong>.
+            </p>
+
+            <div id="wrapOpenAi" class="hidden">
+              <label>OpenAI API key (<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">get a key</a>)</label>
+              <input type="password" id="openaiApiKey" autocomplete="off" />
+              <p class="hint" id="openaiKeyHint"></p>
+            </div>
+            <div id="wrapGemini" class="hidden">
+              <label>Gemini API key (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>)</label>
+              <input type="password" id="geminiApiKey" autocomplete="off" />
+              <p class="hint" id="geminiKeyHint"></p>
+            </div>
 
             <div id="wrapOllama">
               <label>Ollama base URL</label>
@@ -300,8 +360,9 @@
               <label>llama-server base URL</label>
               <input type="text" id="llamaServerUrl" placeholder="http://127.0.0.1:8080" />
               <p class="hint">
-                Use <strong>Start server</strong> above to launch <code>engine/llama-server.exe</code> with your
-                selected GGUF (URL must match <code>--host</code> / <code>--port</code>). Or run
+                Use <strong>Start server</strong> below Active model (next to Save settings) to launch
+                <code>engine/llama-server.exe</code> with your selected GGUF (URL must match <code>--host</code> /
+                <code>--port</code>). Or run
                 <code>llama-server.exe</code> manually. Switch to Ollama above if you use that instead.
                 The Overview tab reads the <strong>saved</strong> base URL — click <strong>Save settings</strong> after
                 you change host or port.
@@ -317,24 +378,13 @@
               <select id="llmModel"></select>
               <button type="button" id="btnRefreshModels" class="primary ghost">Refresh list</button>
             </div>
-            <p class="hint">
-              Choose the model, then click <strong>Save settings</strong> above (or <strong>Save Bot Personal</strong>
-              in Memory — both save the active model). The bot uses this after reload; refresh the list if your GGUF name
-              is missing.
-            </p>
-            <p class="hint" id="catalogHint"></p>
-
-            <label>Models folder (GGUF weights)</label>
-            <input type="text" id="modelsDir" placeholder="models" />
-            <p class="hint">Resolved: <code id="modelsDirResolved"></code></p>
-
-            <label>Engine folder (binaries)</label>
-            <input type="text" id="engineDir" placeholder="engine" />
-            <p class="hint">Resolved: <code id="engineDirResolved"></code> — see <code>engine/README.txt</code></p>
-
-            <h3>GGUF files</h3>
-            <div id="ggufList" class="file-list"></div>
-            <p class="hint err" id="ggufError"></p>
+            <div class="engine-save-actions">
+              <button type="button" id="btnSave">Save settings</button>
+              <div id="wrapServerActions" class="engine-server-actions">
+                <button type="button" id="btnStartServer">Start server</button>
+                <button type="button" id="btnStopServer">Stop server</button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -350,6 +400,15 @@
               Leave empty to approve new users from the Access tab. If you list IDs here, they are approved
               immediately without using the GUI.
             </p>
+            <hr />
+            <h3>Fresh setup (another machine)</h3>
+            <p class="hint">
+              Removes the bot token and legacy IDs saved in <code>data/settings.json</code>, clears the access list in
+              SQLite (pending / approved / blocked), and stops the bot if it is running. Chat history and memory are
+              unchanged. If the token is only in <code>.env</code>, clear that file yourself or unset
+              <code>TELEGRAM_BOT_TOKEN</code> / <code>ALLOWED_USER_IDS</code>.
+            </p>
+            <button type="button" id="btnResetTelegram" class="danger ghost wide">Reset Telegram setup</button>
           </div>
         </section>
 
@@ -410,12 +469,65 @@
         <section class="tab-panel" id="panel-data">
           <h1>Memory &amp; bot persona</h1>
           <p class="lead">
-            Configure the assistant identity (all chats) and per-session user memory (Telegram user id or Control panel).
+            Pick a <strong>session</strong> (Telegram user id or Control panel), then use the tabs for assistant identity,
+            user memory, or the soul table. Assistant fields use global defaults where a session value is left empty.
           </p>
 
+          <div class="toolbar mem-toolbar mem-toolbar-session">
+            <div class="session-select-wrap">
+              <div class="session-select-row">
+                <label for="memSessionSelect">Session -</label>
+                <select id="memSessionSelect" class="chat-session-select"></select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Memory section tabs (table nav + expanding underline, scoped) -->
+          <div class="mem-hnav" aria-label="Memory sections">
+            <ul class="mem-stabnav" role="tablist">
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link active"
+                  id="memSubtabBot"
+                  role="tab"
+                  data-mem-sub="bot"
+                  aria-selected="true"
+                  aria-controls="memPaneBot"
+                  >Assistant (bot) identity</a>
+              </li>
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link"
+                  id="memSubtabSession"
+                  role="tab"
+                  data-mem-sub="session"
+                  aria-selected="false"
+                  aria-controls="memPaneSession"
+                  >User memory by session</a>
+              </li>
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link"
+                  id="memSubtabSouls"
+                  role="tab"
+                  data-mem-sub="souls"
+                  aria-selected="false"
+                  aria-controls="memPaneSouls"
+                  >All soul rows (overview)</a>
+              </li>
+            </ul>
+          </div>
+
+          <div class="mem-subpane" id="memPaneBot" role="tabpanel" aria-labelledby="memSubtabBot" data-mem-sub="bot">
           <div class="card mem-bot-card">
             <h2>Assistant (bot) identity</h2>
-            <p class="hint">Saved in <code>data/settings.json</code> — used in the system prompt for every session.</p>
+            <p class="hint">
+              Per <strong>session</strong> in SQLite <code>soul.preferences.botPersona</code>. Empty fields fall back to
+              global defaults in <code>data/settings.json</code> for that chat only.
+            </p>
             <div class="mem-grid mem-bot-grid">
               <div>
                 <label>Bot display name</label>
@@ -433,14 +545,6 @@
                 <label>Reply style</label>
                 <input type="text" id="botStyle" placeholder="e.g. concise, friendly" />
               </div>
-              <div>
-                <label>Call me (English)</label>
-                <input type="text" id="botAddressUserEn" placeholder="e.g. friend, sir, မင်း" />
-              </div>
-              <div>
-                <label>Call me (Myanmar)</label>
-                <input type="text" id="botAddressUserMy" placeholder="ဥပမာ — ညီလေး၊ မင်း၊ အစ်ကို" />
-              </div>
               <div class="mem-span2">
                 <label>What the bot does / role</label>
                 <textarea
@@ -450,17 +554,29 @@
                 ></textarea>
               </div>
             </div>
-            <button type="button" id="btnSaveBotPersona">Save Bot Personal</button>
+            <div class="mem-actions mem-bot-actions">
+              <button type="button" id="btnSaveBotPersona" class="success">Save for this session</button>
+              <button type="button" id="btnSaveBotPersonaGlobal" class="primary ghost">Save as global default</button>
+            </div>
+            <div class="mem-copy-row mem-bot-copy-row">
+              <label>Copy assistant identity from</label>
+              <select id="memCopyBotFromSelect"></select>
+              <button type="button" id="btnCopyBotPersona" class="primary ghost">Copy into current session</button>
+            </div>
+          </div>
           </div>
 
+          <div
+            class="mem-subpane"
+            id="memPaneSession"
+            role="tabpanel"
+            aria-labelledby="memSubtabSession"
+            data-mem-sub="session"
+            hidden
+          >
           <div class="card mem-user-card">
             <h2>User memory by session</h2>
             <p class="hint">Stored per Telegram user id in SQLite <code>soul</code> table — same data the bot uses in chat.</p>
-            <div class="toolbar mem-toolbar">
-              <label>Session</label>
-              <select id="memSessionSelect" class="chat-session-select"></select>
-              <button type="button" id="btnMemReload" class="primary ghost">Reload</button>
-            </div>
             <div class="mem-grid">
               <div>
                 <label>Display name</label>
@@ -488,6 +604,14 @@
                   <option value="55-64">55–64</option>
                   <option value="65+">65+</option>
                 </select>
+              </div>
+              <div>
+                <label>Call me (English)</label>
+                <input type="text" id="memAddressUserEn" placeholder="e.g. friend, sir, မင်း" />
+              </div>
+              <div>
+                <label>Call me (Myanmar)</label>
+                <input type="text" id="memAddressUserMy" placeholder="ဥပမာ — ညီလေး၊ မင်း၊ အစ်ကို" />
               </div>
               <div class="mem-span2">
                 <label>Who I am</label>
@@ -534,7 +658,16 @@
             </p>
             <button type="button" id="btnClearAllMemory" class="danger wide">Clear ALL memory (whole database)</button>
           </div>
+          </div>
 
+          <div
+            class="mem-subpane"
+            id="memPaneSouls"
+            role="tabpanel"
+            aria-labelledby="memSubtabSouls"
+            data-mem-sub="souls"
+            hidden
+          >
           <div class="card">
             <h2>All soul rows (overview)</h2>
             <button type="button" id="btnRefreshSouls" class="primary ghost">Refresh table</button>
@@ -552,6 +685,7 @@
               </table>
             </div>
           </div>
+          </div>
         </section>
 
         <section class="tab-panel" id="panel-chat">
@@ -561,9 +695,13 @@
           </p>
           <div class="card chat-console">
             <div class="toolbar chat-toolbar">
-              <label>Session</label>
-              <select id="chatSessionSelect" class="chat-session-select"></select>
-              <label>History</label>
+              <div class="session-select-wrap">
+                <div class="session-select-row">
+                  <label for="chatSessionSelect">Session -</label>
+                  <select id="chatSessionSelect" class="chat-session-select"></select>
+                </div>
+              </div>
+              <label for="chatLimit">History</label>
               <select id="chatLimit">
                 <option value="50">50</option>
                 <option value="100" selected>100</option>
@@ -573,10 +711,31 @@
               <button type="button" id="btnRefreshChat" class="primary ghost">Refresh</button>
             </div>
             <p class="hint chat-session-hint" id="chatSessionHint"></p>
-            <div id="chatThread" class="chat-thread" aria-live="polite"></div>
-            <div class="chat-compose">
-              <textarea id="chatInput" rows="3" placeholder="Type a message… (Enter to send, Shift+Enter newline)"></textarea>
-              <button type="button" id="btnChatSend" class="success">Send</button>
+            <!-- Chat shell layout from Uiverse.io (reglobby); colors match app glass theme -->
+            <div class="chat-messenger">
+              <div id="chatThread" class="chat-thread chat-messenger-thread" aria-live="polite"></div>
+              <div class="chat-messenger-compose">
+                <div class="chat-messenger-input-place">
+                  <textarea
+                    id="chatInput"
+                    class="chat-messenger-input"
+                    rows="2"
+                    placeholder="Type a message… (Enter to send, Shift+Enter newline)"
+                  ></textarea>
+                  <button type="button" id="btnChatSend" class="chat-messenger-send" aria-label="Send">
+                    <svg
+                      class="chat-messenger-send-icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 512 512"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M481.508,210.336L68.414,38.926c-17.403-7.222-37.064-4.045-51.309,8.287C2.86,59.547-3.098,78.551,1.558,96.808 L38.327,241h180.026c8.284,0,15.001,6.716,15.001,15.001c0,8.284-6.716,15.001-15.001,15.001H38.327L1.558,415.193 c-4.656,18.258,1.301,37.262,15.547,49.595c14.274,12.357,33.937,15.495,51.31,8.287l413.094-171.409 C500.317,293.862,512,276.364,512,256.001C512,235.638,500.317,218.139,481.508,210.336z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -591,6 +750,7 @@
                   <th>Starts</th>
                   <th>User</th>
                   <th>Title</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="calBody"></tbody>
@@ -609,6 +769,7 @@
                   <th>Kind</th>
                   <th>Payload</th>
                   <th>Since</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody id="pendingBody"></tbody>
@@ -628,6 +789,45 @@
 
             <label>Max pages per search</label>
             <input type="number" id="maxBrowsePages" min="1" max="2" />
+
+            <div class="switch-field switch-field--neo">
+              <span class="switch-field-label" id="webSearchEnabledLabel">Web search (DuckDuckGo)</span>
+              <div class="neo-toggle-container" title="Saved in data/settings.json">
+                <input
+                  class="neo-toggle-input"
+                  id="webSearchEnabled"
+                  type="checkbox"
+                  aria-labelledby="webSearchEnabledLabel"
+                />
+                <label class="neo-toggle" for="webSearchEnabled">
+                  <div class="neo-track">
+                    <div class="neo-background-layer"></div>
+                    <div class="neo-grid-layer"></div>
+                    <div class="neo-track-highlight"></div>
+                  </div>
+                  <div class="neo-thumb">
+                    <div class="neo-thumb-ring"></div>
+                    <div class="neo-thumb-core">
+                      <div class="neo-thumb-icon">
+                        <div class="neo-thumb-wave"></div>
+                        <div class="neo-thumb-pulse"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="neo-gesture-area"></div>
+                  <div class="neo-interaction-feedback">
+                    <div class="neo-ripple"></div>
+                    <div class="neo-progress-arc"></div>
+                  </div>
+                  <div class="neo-status">
+                    <div class="neo-status-indicator">
+                      <div class="neo-status-dot"></div>
+                      <div class="neo-status-text"></div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
 
             <label>Log level</label>
             <select id="logLevel">

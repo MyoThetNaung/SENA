@@ -8,6 +8,13 @@ export const projectRoot = path.resolve(__dirname, '..');
 
 const SETTINGS_PATH = path.join(projectRoot, 'data', 'settings.json');
 
+function webSearchFromSettings(settings) {
+  const ws = settings.webSearchEnabled;
+  if (ws === true) return true;
+  if (ws === false) return false;
+  return String(process.env.WEB_SEARCH ?? '').trim() === '1';
+}
+
 function readSettingsFile() {
   if (!fs.existsSync(SETTINGS_PATH)) return {};
   try {
@@ -58,7 +65,17 @@ function buildConfig() {
   const llmProviderRaw = String(
     settings.llmProvider ?? process.env.LLM_PROVIDER ?? 'llama-server'
   ).toLowerCase();
-  const llmProvider = llmProviderRaw === 'llama-server' || llmProviderRaw === 'llamacpp' ? 'llama-server' : 'ollama';
+  let llmProvider = 'llama-server';
+  if (llmProviderRaw === 'ollama') llmProvider = 'ollama';
+  else if (llmProviderRaw === 'openai') llmProvider = 'openai';
+  else if (llmProviderRaw === 'gemini' || llmProviderRaw === 'google') llmProvider = 'gemini';
+  else if (llmProviderRaw === 'llama-server' || llmProviderRaw === 'llamacpp') llmProvider = 'llama-server';
+  const openaiApiKey = String(
+    settings.openaiApiKey ?? process.env.OPENAI_API_KEY ?? ''
+  ).trim();
+  const geminiApiKey = String(
+    settings.geminiApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? ''
+  ).trim();
   const llmModel = String(
     settings.llmModel ?? settings.ollamaModel ?? process.env.LLM_MODEL ?? process.env.OLLAMA_MODEL ?? 'llama3.2'
   );
@@ -84,6 +101,7 @@ function buildConfig() {
     2,
     Math.max(1, Number(settings.maxBrowsePages ?? process.env.MAX_BROWSE_PAGES) || 2)
   );
+  const webSearchEnabled = webSearchFromSettings(settings);
   const guiPort = Math.min(
     65535,
     Math.max(1024, Number(settings.guiPort ?? process.env.GUI_PORT) || 3847)
@@ -113,6 +131,8 @@ function buildConfig() {
     ollamaBaseUrl,
     llamaServerUrl,
     llmProvider,
+    openaiApiKey,
+    geminiApiKey,
     llmModel,
     /** @deprecated use llmModel */
     ollamaModel: llmModel,
@@ -122,6 +142,7 @@ function buildConfig() {
     logLevel,
     browserTimeoutMs,
     maxBrowsePages,
+    webSearchEnabled,
     guiPort,
     modelsDir,
     openBrowserGui,

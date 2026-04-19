@@ -29,7 +29,7 @@ function formatEvents(rows) {
 function buildMessages(userId, userText) {
   const soul = getSoul(userId);
   const memoryBlock = formatSoulForPrompt(soul);
-  const system = `${baseSystemPrompt()}\n\n---\nUser memory (Soul ID):\n${memoryBlock}`;
+  const system = `${baseSystemPrompt(userId)}\n\n---\nUser memory (Soul ID):\n${memoryBlock}`;
   return [
     { role: 'system', content: system },
     { role: 'user', content: userText },
@@ -86,6 +86,15 @@ export async function handleTextMessage(userId, text) {
         const q = pending.payload?.query || '';
         clearPending(userId);
         if (!q) return { reply: 'Nothing to search.' };
+        if (!getConfig().webSearchEnabled) {
+          try {
+            const reply = await chat(buildMessages(userId, q), { timeoutMs: 120000 });
+            return { reply: reply || '(empty model response)' };
+          } catch (e) {
+            logger.error(`Chat error: ${e.message}`);
+            return { reply: `Model error: ${e.message}` };
+          }
+        }
         const res = await searchAndSummarize(q);
         if (!res.ok) {
           return { reply: `Web search failed: ${res.error}` };
@@ -125,7 +134,7 @@ export async function handleTextMessage(userId, text) {
     intent = 'CHAT';
   }
 
-  if (intent === 'SEARCH') {
+  if (intent === 'SEARCH' && getConfig().webSearchEnabled) {
     const q = trimmed.replace(/^\s*(search|look\s*up|google)\s*[:\s]*/i, '').trim() || trimmed;
     setPending(userId, 'web_search', { query: q });
     return {
@@ -169,6 +178,15 @@ export async function handleConfirmCallback(userId, accepted) {
     const q = pending.payload?.query || '';
     clearPending(userId);
     if (!q) return { reply: 'Nothing to search.' };
+    if (!getConfig().webSearchEnabled) {
+      try {
+        const reply = await chat(buildMessages(userId, q), { timeoutMs: 120000 });
+        return { reply: reply || '(empty model response)' };
+      } catch (e) {
+        logger.error(`Chat error: ${e.message}`);
+        return { reply: `Model error: ${e.message}` };
+      }
+    }
     const res = await searchAndSummarize(q);
     if (!res.ok) {
       return { reply: `Web search failed: ${res.error}` };

@@ -63,6 +63,18 @@ export function updateSoul(userId, patch) {
   ).run(display_name, JSON.stringify(preferences), JSON.stringify(facts), userId);
 }
 
+export function normalizeSoulBotPersona(raw) {
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  return {
+    displayName: String(o.displayName ?? '').trim(),
+    gender: String(o.gender ?? '').trim(),
+    style: String(o.style ?? '').trim(),
+    role: String(o.role ?? '').trim(),
+    addressUserEn: String(o.addressUserEn ?? '').trim(),
+    addressUserMy: String(o.addressUserMy ?? '').trim(),
+  };
+}
+
 export function formatSoulForPrompt(soul) {
   const parts = [];
   if (soul.display_name) parts.push(`Name (preferred): ${soul.display_name}`);
@@ -78,6 +90,7 @@ export function formatSoulForPrompt(soul) {
   }
   const restPrefs = { ...prefs };
   delete restPrefs.profile;
+  delete restPrefs.botPersona;
   if (Object.keys(restPrefs).length) {
     parts.push(`Other preferences: ${JSON.stringify(restPrefs)}`);
   }
@@ -102,8 +115,8 @@ export function mergeProfileMemorySummary(userId, summaryText) {
   );
 }
 
-/** Replace display name and profile (Control Panel). Legacy facts column cleared on save. */
-export function setSoulContent(userId, { display_name, profile }) {
+/** Replace display name, profile, and/or per-session assistant (bot) persona. Legacy facts column cleared on save. */
+export function setSoulContent(userId, { display_name, profile, botPersona }) {
   ensureSoul(userId);
   const db = getDb();
   const current = getSoul(userId);
@@ -120,9 +133,17 @@ export function setSoulContent(userId, { display_name, profile }) {
           age: String(profile.age ?? '').trim(),
           extra: String(profile.extra ?? '').trim(),
           memorySummary: String(profile.memorySummary ?? prevProf.memorySummary ?? '').trim(),
+          addressUserEn: String(profile.addressUserEn ?? prevProf.addressUserEn ?? '').trim(),
+          addressUserMy: String(profile.addressUserMy ?? prevProf.addressUserMy ?? '').trim(),
         }
       : { ...prevProf };
   const preferences = { ...current.preferences, profile: nextProfile };
+  if (botPersona !== undefined) {
+    const norm = normalizeSoulBotPersona(botPersona);
+    const any = Object.values(norm).some((v) => v !== '');
+    if (any) preferences.botPersona = norm;
+    else delete preferences.botPersona;
+  }
   const name = display_name !== undefined ? String(display_name || '').trim() || null : current.display_name;
   db.prepare(
     `UPDATE soul SET display_name = ?, preferences = ?, facts = ?, updated_at = datetime('now') WHERE user_id = ?`
@@ -141,4 +162,22 @@ export function copySoulFromTo(fromUserId, toUserId) {
   db.prepare(
     `UPDATE soul SET display_name = ?, preferences = ?, facts = ?, updated_at = datetime('now') WHERE user_id = ?`
   ).run(src.display_name, JSON.stringify(src.preferences), JSON.stringify(src.facts), toUserId);
+}
+
+/** Copy only `preferences.botPersona` from one soul to another (rest of destination soul unchanged). */
+export function copyBotPersonaFromTo(fromUserId, toUserId) {
+  ensureSoul(fromUserId);
+  ensureSoul(toUserId);
+  const src = getSoul(fromUserId);
+  const dest = getSoul(toUserId);
+  const raw = src.preferences?.botPersona;
+  const preferences = { ...dest.preferences };
+  const norm = normalizeSoulBotPersona(raw);
+  const any = Object.values(norm).some((v) => v !== '');
+  if (any) preferences.botPersona = norm;
+  else delete preferences.botPersona;
+  const db = getDb();
+  db.prepare(
+    `UPDATE soul SET preferences = ?, updated_at = datetime('now') WHERE user_id = ?`
+  ).run(JSON.stringify(preferences), toUserId);
 }

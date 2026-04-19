@@ -42,6 +42,15 @@ export function listAllEvents(limit = 300) {
     .all(lim);
 }
 
+/** @returns {boolean} true if a row was removed */
+export function deleteEventById(id) {
+  const n = Number(id);
+  if (!Number.isFinite(n) || n < 1) return false;
+  const db = getDb();
+  const r = db.prepare('DELETE FROM events WHERE id = ?').run(n);
+  return r.changes > 0;
+}
+
 export function getUpcomingEvents(userId, limit = 10) {
   const db = getDb();
   const now = new Date().toISOString();

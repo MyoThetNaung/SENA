@@ -81,6 +81,11 @@ export function getTelegramLabelsForUserIds(userIds) {
   return m;
 }
 
+/** Remove all rows (pending / approved / blocked). Next message re-seeds access flow. */
+export function clearTelegramAccessRecords() {
+  getDb().prepare('DELETE FROM telegram_users').run();
+}
+
 export function listTelegramUsers(filterStatus = null) {
   const db = getDb();
   if (filterStatus && ['pending', 'approved', 'blocked'].includes(filterStatus)) {

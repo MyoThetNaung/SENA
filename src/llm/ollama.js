@@ -1,48 +1,48 @@
 import { getConfig } from '../config.js';
+import { getSoul } from '../memory/soul.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
 import { startLlamaServerIfConfigured } from './llamaProcess.js';
 import { recordLlmUsage } from './tokenUsage.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
+import { sanitizeChatCompletionText, CHAT_TEMPLATE_STOP_SEQUENCES } from './sanitizeCompletion.js';
+import { openaiChatWithUsage, geminiChatWithUsage } from './cloudLlm.js';
 
-const BASE_SYSTEM = `You are SENA (Smart Engine for Notes & Action) AI Assistant — a private, local assistant.
+export { sanitizeChatCompletionText };
+
+const BASE_SYSTEM = `You are SENA (Smart Engine for Notes & Action) AI Assistant — a private assistant (local or cloud LLM per user settings).
 You must be helpful, concise, and accurate.
 
 Use tools when needed.
 Do not hallucinate.
 Ask for confirmation before performing actions.`;
 
-/** Stops generation at end-of-turn for ChatML / Gemma-style templates (llama-server often needs these). */
-const CHAT_TEMPLATE_STOP_SEQUENCES = [
-  '<|im_end|>',
-  '<|redacted_im_end|>',
-  '<|im_start|>',
-  '<|redacted_im_start|>',
-  '<|endoftext|>',
-  '<|eot_id|>',
-  '<|end_of_turn|>',
-  '</s>',
-];
-
-/**
- * Models sometimes emit the next turn's template tokens; cut those off before showing the user.
- */
-export function sanitizeChatCompletionText(text) {
-  if (typeof text !== 'string') return '';
-  let s = text;
-  const truncateBefore = ['<|im_start|>', '<|redacted_im_start|>'];
-  for (const m of truncateBefore) {
-    const i = s.indexOf(m);
-    if (i !== -1) s = s.slice(0, i);
+function mergeBotPersonaForUserId(userId) {
+  const global = getConfig().botPersona || {};
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) return { ...global };
+  const soul = getSoul(uid);
+  const raw = soul.preferences?.botPersona;
+  const local = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const keys = ['displayName', 'gender', 'style', 'role', 'addressUserEn', 'addressUserMy'];
+  const out = { ...global };
+  for (const k of keys) {
+    const v = local[k];
+    if (typeof v === 'string' && v.trim() !== '') out[k] = v.trim();
   }
-  s = s.replace(/<\|(?:redacted_)?im_end\|>/gi, '');
-  s = s.replace(/<\|eot_id\|>/g, '');
-  s = s.replace(/<\|endoftext\|>/gi, '');
-  return s.trim();
+  const prof =
+    soul.preferences?.profile && typeof soul.preferences.profile === 'object' ? soul.preferences.profile : {};
+  if (typeof prof.addressUserEn === 'string' && prof.addressUserEn.trim() !== '') {
+    out.addressUserEn = prof.addressUserEn.trim();
+  }
+  if (typeof prof.addressUserMy === 'string' && prof.addressUserMy.trim() !== '') {
+    out.addressUserMy = prof.addressUserMy.trim();
+  }
+  return out;
 }
 
-function formatBotPersonaBlock() {
-  const p = getConfig().botPersona || {};
+function formatBotPersonaBlock(persona) {
+  const p = persona || {};
   const lines = [];
   if (p.displayName) lines.push(`Assistant name: ${p.displayName}`);
   if (p.role) lines.push(`Role / what you do: ${p.role}`);
@@ -53,10 +53,16 @@ function formatBotPersonaBlock() {
   return lines.join('\n');
 }
 
-export function baseSystemPrompt() {
-  const persona = formatBotPersonaBlock();
+/** @param {number} [userId] Chat / Telegram user id — per-soul bot persona overrides global settings when set. */
+export function baseSystemPrompt(userId) {
+  const persona = formatBotPersonaBlock(mergeBotPersonaForUserId(userId));
   let s = BASE_SYSTEM;
   if (persona) s += `\n\n---\n${persona}`;
+  if (!getConfig().webSearchEnabled) {
+    s +=
+      '\n\nYou do not have live web search. Answer from this conversation, user memory, and general knowledge; ' +
+      'if the user needs current online facts, say web search is turned off and give the best non-live answer you can.';
+  }
   return s;
 }
 
@@ -209,7 +215,32 @@ async function llamaServerChatWithUsage(messages, options = {}) {
  */
 export async function chat(messages, options = {}) {
   const model = activeModel(options);
-  if (getConfig().llmProvider === 'llama-server') {
+  const provider = getConfig().llmProvider;
+
+  if (provider === 'openai') {
+    const r = await openaiChatWithUsage(messages, options);
+    recordLlmUsage({
+      provider: 'openai',
+      model,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      durationMs: r.durationMs,
+    });
+    return r.text;
+  }
+  if (provider === 'gemini') {
+    const r = await geminiChatWithUsage(messages, options);
+    recordLlmUsage({
+      provider: 'gemini',
+      model,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      durationMs: r.durationMs,
+    });
+    return r.text;
+  }
+
+  if (provider === 'llama-server') {
     const llama = await startLlamaServerIfConfigured(true);
     if (!llama.ok) {
       throw new Error(
@@ -266,8 +297,9 @@ export async function chat(messages, options = {}) {
  * Streaming chat — Ollama only (llama-server stream format differs).
  */
 export async function* chatStream(messages, options = {}) {
-  if (getConfig().llmProvider === 'llama-server') {
-    throw new Error('Streaming is only implemented for Ollama; use non-stream chat with llama-server.');
+  const p = getConfig().llmProvider;
+  if (p === 'llama-server' || p === 'openai' || p === 'gemini') {
+    throw new Error('Streaming is only implemented for Ollama; use non-stream chat for other backends.');
   }
   const model = activeModel(options);
   const timeoutMs = options.timeoutMs ?? 120000;
@@ -315,23 +347,23 @@ export async function* chatStream(messages, options = {}) {
 }
 
 export async function classifyIntent(userMessage) {
+  const { webSearchEnabled } = getConfig();
+  const system = webSearchEnabled
+    ? 'Classify the user message into exactly one word: CHAT, SEARCH, or CALENDAR.\n' +
+      '- CHAT: conversation, advice, coding help, opinions, no live web or schedule needed.\n' +
+      '- SEARCH: user needs current/public web information, news, prices, facts from the internet.\n' +
+      '- CALENDAR: scheduling, events, reminders, or asking what is on their schedule.\n' +
+      'Reply with only one word.'
+    : 'Classify the user message into exactly one word: CHAT or CALENDAR.\n' +
+      '- CHAT: conversation, advice, coding help, opinions, general knowledge (no live web).\n' +
+      '- CALENDAR: scheduling, events, reminders, or asking what is on their schedule.\n' +
+      'Reply with only one word.';
   const text = await chat(
-    [
-      {
-        role: 'system',
-        content:
-          'Classify the user message into exactly one word: CHAT, SEARCH, or CALENDAR.\n' +
-          '- CHAT: conversation, advice, coding help, opinions, no live web or schedule needed.\n' +
-          '- SEARCH: user needs current/public web information, news, prices, facts from the internet.\n' +
-          '- CALENDAR: scheduling, events, reminders, or asking what is on their schedule.\n' +
-          'Reply with only one word.',
-      },
-      { role: 'user', content: userMessage.slice(0, 2000) },
-    ],
+    [{ role: 'system', content: system }, { role: 'user', content: userMessage.slice(0, 2000) }],
     { timeoutMs: 45000, temperature: 0 }
   );
   const u = text.toUpperCase();
-  if (u.includes('SEARCH')) return 'SEARCH';
+  if (webSearchEnabled && u.includes('SEARCH')) return 'SEARCH';
   if (u.includes('CALENDAR')) return 'CALENDAR';
   return 'CHAT';
 }

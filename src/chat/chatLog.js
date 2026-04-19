@@ -1,4 +1,5 @@
 import { getDb } from '../db.js';
+import { sqliteUtcStringToIsoZ } from '../util/sqliteUtc.js';
 
 const MAX_LEN = 50000;
 
@@ -11,11 +12,20 @@ export function appendChatMessage(userId, role, content) {
   const r = String(role).toLowerCase();
   if (r !== 'user' && r !== 'assistant' && r !== 'system') return;
   const db = getDb();
-  db.prepare('INSERT INTO chat_log (user_id, role, content) VALUES (?, ?, ?)').run(
+  const createdAt = new Date().toISOString();
+  db.prepare('INSERT INTO chat_log (user_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(
     userId,
     r,
-    trim(content)
+    trim(content),
+    createdAt
   );
+}
+
+function mapChatRow(row) {
+  return {
+    ...row,
+    created_at: sqliteUtcStringToIsoZ(row.created_at),
+  };
 }
 
 export function listChatMessages({ userId = null, limit = 100 } = {}) {
@@ -33,7 +43,8 @@ export function listChatMessages({ userId = null, limit = 100 } = {}) {
        LIMIT ?`
       )
       .all(Number(userId), lim)
-      .reverse();
+      .reverse()
+      .map(mapChatRow);
   }
   return db
     .prepare(
@@ -44,7 +55,8 @@ export function listChatMessages({ userId = null, limit = 100 } = {}) {
      LIMIT ?`
     )
     .all(lim)
-    .reverse();
+    .reverse()
+    .map(mapChatRow);
 }
 
 export function listChatUserIds() {
@@ -65,5 +77,8 @@ export function listChatSessions() {
        ORDER BY last_at DESC`
     )
     .all();
-  return rows.map((r) => ({ userId: r.user_id, lastAt: r.last_at }));
+  return rows.map((r) => ({
+    userId: r.user_id,
+    lastAt: r.last_at != null ? sqliteUtcStringToIsoZ(r.last_at) : r.last_at,
+  }));
 }

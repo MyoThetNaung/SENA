@@ -1,4 +1,5 @@
 import { classifyIntent as classifyIntentLlm } from '../llm/ollama.js';
+import { getConfig } from '../config.js';
 import { logger } from '../logger.js';
 
 /**
@@ -16,8 +17,9 @@ export function keywordIntentHint(text) {
     return 'CALENDAR';
   }
   if (
-    /\b(search|look up|google)\b.+\b(for|about)\b/.test(t) ||
-    /\b(latest news|current price|what happened today)\b/.test(t)
+    getConfig().webSearchEnabled &&
+    (/\b(search|look up|google)\b.+\b(for|about)\b/.test(t) ||
+      /\b(latest news|current price|what happened today)\b/.test(t))
   ) {
     return 'SEARCH';
   }

@@ -16,20 +16,23 @@ import {
   setSoulContent,
   clearSoul,
   copySoulFromTo,
+  copyBotPersonaFromTo,
 } from '../memory/soul.js';
 import { clearAllStoredMemory } from '../memory/clearAllMemory.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { resetDatabaseConnection, getDb } from '../db.js';
-import { listAllEvents } from '../calendar/calendar.js';
-import { listAllPending } from '../core/pending.js';
+import { listAllEvents, deleteEventById } from '../calendar/calendar.js';
+import { listAllPending, clearPending } from '../core/pending.js';
 import {
   listTelegramUsers,
   setTelegramUserStatus,
   getTelegramLabelsForUserIds,
+  clearTelegramAccessRecords,
 } from '../access/telegramAccess.js';
 import { handleTextMessage } from '../core/orchestrator.js';
 import { GUI_CONSOLE_USER_ID } from '../const/guiSession.js';
-import { buildModelCatalog, probeLlamaServerReachable } from '../llm/catalog.js';
+import { buildModelCatalog, probeLlamaServerReachable, normalizeCatalogLlmProvider } from '../llm/catalog.js';
+import { fetchOpenAiModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
 import { startBotFromGui, stopBotFromGui, getBotStatus } from './bot-runner.js';
 import {
   startLlamaServerIfConfigured,
@@ -95,6 +98,12 @@ function readSettingsForApi() {
   const fileTok = String(raw.telegramBotToken || '').trim();
   const envTok = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
   const hasSavedToken = Boolean(fileTok || envTok);
+  const fileOpenai = String(raw.openaiApiKey || '').trim();
+  const envOpenai = String(process.env.OPENAI_API_KEY || '').trim();
+  const hasOpenAiKey = Boolean(fileOpenai || envOpenai);
+  const fileGem = String(raw.geminiApiKey || '').trim();
+  const envGem = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
+  const hasGeminiKey = Boolean(fileGem || envGem);
   const gguf = listGgufInFolder(c.modelsDir);
   const databasePathInput =
     raw.databasePath != null && String(raw.databasePath).trim() !== ''
@@ -123,6 +132,7 @@ function readSettingsForApi() {
     logLevel: c.logLevel,
     browserTimeoutMs: c.browserTimeoutMs,
     maxBrowsePages: c.maxBrowsePages,
+    webSearchEnabled: c.webSearchEnabled,
     databasePath: databasePathInput,
     databasePathResolved: c.databasePath,
     modelsDir: c.modelsDir,
@@ -136,6 +146,10 @@ function readSettingsForApi() {
     settingsFileExists: fileExists,
     ggufFolder: gguf.folder,
     ggufFiles: gguf.files,
+    hasOpenAiKey,
+    hasGeminiKey,
+    openaiApiKeyMasked: maskToken(c.openaiApiKey),
+    geminiApiKeyMasked: maskToken(c.geminiApiKey),
   };
   if (gguf.error) out.ggufError = gguf.error;
   return out;
@@ -170,7 +184,23 @@ export function createGuiApp() {
       }
       if (typeof b.llmProvider === 'string') {
         const p = b.llmProvider.toLowerCase();
-        patch.llmProvider = p === 'llama-server' || p === 'llamacpp' ? 'llama-server' : 'ollama';
+        const map = {
+          ollama: 'ollama',
+          'llama-server': 'llama-server',
+          llamacpp: 'llama-server',
+          openai: 'openai',
+          gemini: 'gemini',
+          google: 'gemini',
+        };
+        if (map[p]) patch.llmProvider = map[p];
+      }
+      if (typeof b.openaiApiKey === 'string') {
+        const t = b.openaiApiKey.trim();
+        if (t) patch.openaiApiKey = t;
+      }
+      if (typeof b.geminiApiKey === 'string') {
+        const t = b.geminiApiKey.trim();
+        if (t) patch.geminiApiKey = t;
       }
       if (typeof b.ollamaBaseUrl === 'string' && b.ollamaBaseUrl.trim()) {
         patch.ollamaBaseUrl = b.ollamaBaseUrl.trim().replace(/\/$/, '');
@@ -202,6 +232,9 @@ export function createGuiApp() {
       if (b.maxBrowsePages != null && b.maxBrowsePages !== '') {
         const n = Number(b.maxBrowsePages);
         if (Number.isFinite(n)) patch.maxBrowsePages = Math.min(2, Math.max(1, n));
+      }
+      if (typeof b.webSearchEnabled === 'boolean') {
+        patch.webSearchEnabled = b.webSearchEnabled;
       }
       if (typeof b.databasePath === 'string') {
         const d = b.databasePath.trim();
@@ -245,6 +278,22 @@ export function createGuiApp() {
     }
   });
 
+  /** Saved token + legacy auto-approve IDs + SQLite access list. Stops bot if running. Does not edit .env. */
+  app.post('/api/settings/reset-telegram', async (req, res) => {
+    try {
+      const stopOut = await stopBotFromGui();
+      if (!stopOut.ok && stopOut.error !== 'Bot is not running.') {
+        logger.warn(`reset-telegram: could not stop bot cleanly: ${stopOut.error}`);
+      }
+      saveSettingsToDisk({ telegramBotToken: null, allowedUserIds: null });
+      clearTelegramAccessRecords();
+      syncLoggerLevel();
+      res.json({ ok: true, settings: readSettingsForApi() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get('/api/system/hardware', async (req, res) => {
     try {
       const data = await getHardwareSnapshot();
@@ -283,6 +332,7 @@ export function createGuiApp() {
       const spawnedByApp = llamaProcessRunning();
       let listening = false;
       let ollamaReachable = false;
+      let cloudReachable = false;
       if (c.llmProvider === 'llama-server') {
         const url = c.llamaServerUrl.replace(/\/$/, '');
         listening = await probeLlamaServerReachable(url, 3000);
@@ -297,10 +347,31 @@ export function createGuiApp() {
         } catch {
           ollamaReachable = false;
         }
+      } else if (c.llmProvider === 'openai') {
+        const r = await fetchOpenAiModelNames(c.openaiApiKey);
+        cloudReachable = r.ok;
+      } else if (c.llmProvider === 'gemini') {
+        const r = await fetchGeminiModelNames(c.geminiApiKey);
+        cloudReachable = r.ok;
       }
-      const backendUrl = c.llmProvider === 'llama-server' ? c.llamaServerUrl : c.ollamaBaseUrl;
+      const backendUrl =
+        c.llmProvider === 'llama-server'
+          ? c.llamaServerUrl
+          : c.llmProvider === 'ollama'
+            ? c.ollamaBaseUrl
+            : c.llmProvider === 'openai'
+              ? 'https://api.openai.com/v1'
+              : c.llmProvider === 'gemini'
+                ? 'https://generativelanguage.googleapis.com'
+                : '';
       const online =
-        c.llmProvider === 'llama-server' ? listening : c.llmProvider === 'ollama' ? ollamaReachable : false;
+        c.llmProvider === 'llama-server'
+          ? listening
+          : c.llmProvider === 'ollama'
+            ? ollamaReachable
+            : c.llmProvider === 'openai' || c.llmProvider === 'gemini'
+              ? cloudReachable
+              : false;
       res.json({
         provider: c.llmProvider,
         url: backendUrl,
@@ -426,7 +497,8 @@ export function createGuiApp() {
   app.get('/api/llm/catalog', async (req, res) => {
     try {
       reloadConfig();
-      const catalog = await buildModelCatalog();
+      const override = normalizeCatalogLlmProvider(req.query?.llmProvider);
+      const catalog = await buildModelCatalog(override ? { llmProvider: override } : {});
       res.json(catalog);
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -501,7 +573,11 @@ export function createGuiApp() {
       const soulRows = listSouls();
       const fromSoul = soulRows.map((s) => s.user_id);
       const set = new Set([...fromChat, ...fromSoul, GUI_CONSOLE_USER_ID]);
-      const ids = [...set].sort((a, b) => a - b);
+      const ids = [...set].sort((a, b) => {
+        if (a === GUI_CONSOLE_USER_ID) return -1;
+        if (b === GUI_CONSOLE_USER_ID) return 1;
+        return a - b;
+      });
       const labels = getTelegramLabelsForUserIds(ids);
       const sessions = ids.map((userId) => ({
         userId,
@@ -542,6 +618,7 @@ export function createGuiApp() {
       setSoulContent(userId, {
         display_name: b.display_name,
         profile: b.profile,
+        botPersona: b.botPersona,
       });
       res.json({ ok: true, soul: getSoul(userId) });
     } catch (e) {
@@ -574,6 +651,22 @@ export function createGuiApp() {
       }
       getDb();
       copySoulFromTo(fromUserId, toUserId);
+      res.json({ ok: true, soul: getSoul(toUserId) });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/soul/copy-bot-persona', (req, res) => {
+    try {
+      const fromUserId = Number((req.body || {}).fromUserId);
+      const toUserId = Number((req.body || {}).toUserId);
+      if (!Number.isFinite(fromUserId) || !Number.isFinite(toUserId)) {
+        res.status(400).json({ ok: false, error: 'fromUserId and toUserId must be numbers' });
+        return;
+      }
+      getDb();
+      copyBotPersonaFromTo(fromUserId, toUserId);
       res.json({ ok: true, soul: getSoul(toUserId) });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
@@ -624,6 +717,40 @@ export function createGuiApp() {
       res.json({ pending: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/data/calendar/delete', (req, res) => {
+    try {
+      getDb();
+      const id = Number((req.body || {}).id);
+      if (!Number.isFinite(id) || id < 1) {
+        res.status(400).json({ ok: false, error: 'Valid event id is required.' });
+        return;
+      }
+      const ok = deleteEventById(id);
+      if (!ok) {
+        res.status(404).json({ ok: false, error: 'No event with that id.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/data/pending/delete', (req, res) => {
+    try {
+      getDb();
+      const userId = Number((req.body || {}).userId);
+      if (!Number.isFinite(userId)) {
+        res.status(400).json({ ok: false, error: 'Valid userId is required.' });
+        return;
+      }
+      clearPending(userId);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
     }
   });
 

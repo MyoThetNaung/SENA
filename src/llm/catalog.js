@@ -4,6 +4,7 @@ import path from 'path';
 import { getConfig } from '../config.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
+import { fetchOpenAiModelNames, fetchGeminiModelNames } from './cloudLlm.js';
 
 async function safeJson(res) {
   const t = await res.text();
@@ -149,9 +150,22 @@ export async function fetchLlamaServerModelNames(baseUrl) {
   }
 }
 
-/** Combined catalog for Control Panel dropdown. */
-export async function buildModelCatalog() {
+/** Normalize optional catalog override (query param / preview). Invalid values fall back to saved config. */
+export function normalizeCatalogLlmProvider(raw) {
+  const x = String(raw || '').toLowerCase().trim();
+  if (x === 'google') return 'gemini';
+  if (['ollama', 'llama-server', 'openai', 'gemini'].includes(x)) return x;
+  return null;
+}
+
+/**
+ * Combined catalog for Control Panel dropdown.
+ * @param {{ llmProvider?: string }} [opts] When `llmProvider` is set, list models for that backend using saved URLs/keys (no full settings save required).
+ */
+export async function buildModelCatalog(opts = {}) {
   const c = getConfig();
+  const override = normalizeCatalogLlmProvider(opts.llmProvider);
+  const llmProvider = override || c.llmProvider;
   const gguf = [];
   try {
     const dir = c.modelsDir;
@@ -180,10 +194,14 @@ export async function buildModelCatalog() {
   }
 
   let remote = { ok: false, models: [], error: null };
-  if (c.llmProvider === 'llama-server') {
+  if (llmProvider === 'llama-server') {
     remote = await fetchLlamaServerModelNames(c.llamaServerUrl);
-  } else {
+  } else if (llmProvider === 'ollama') {
     remote = await fetchOllamaModelNames(c.ollamaBaseUrl);
+  } else if (llmProvider === 'openai') {
+    remote = await fetchOpenAiModelNames(c.openaiApiKey);
+  } else if (llmProvider === 'gemini') {
+    remote = await fetchGeminiModelNames(c.geminiApiKey);
   }
 
   const seen = new Set();
@@ -194,15 +212,18 @@ export async function buildModelCatalog() {
       combined.push({ id: m, source: 'remote', label: m });
     }
   }
-  for (const g of gguf) {
-    if (!seen.has(g.id)) {
-      seen.add(g.id);
-      combined.push({ id: g.id, source: 'gguf', label: `${g.id} (.gguf)` });
+  const includeGguf = llmProvider === 'llama-server' || llmProvider === 'ollama';
+  if (includeGguf) {
+    for (const g of gguf) {
+      if (!seen.has(g.id)) {
+        seen.add(g.id);
+        combined.push({ id: g.id, source: 'gguf', label: `${g.id} (.gguf)` });
+      }
     }
   }
 
   return {
-    provider: c.llmProvider,
+    provider: llmProvider,
     ollamaBaseUrl: c.ollamaBaseUrl,
     llamaServerUrl: c.llamaServerUrl,
     engineDir: c.engineDir,

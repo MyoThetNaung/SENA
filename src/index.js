@@ -19,7 +19,8 @@ try {
 
 const cfg = getConfig();
 logger.info(
-  `LLM backend=${cfg.llmProvider} model=${cfg.llmModel} | Ollama=${cfg.ollamaBaseUrl} | llama-server=${cfg.llamaServerUrl}`
+  `LLM backend=${cfg.llmProvider} model=${cfg.llmModel} | Ollama=${cfg.ollamaBaseUrl} | llama-server=${cfg.llamaServerUrl}` +
+    (cfg.llmProvider === 'openai' ? ' | OpenAI cloud' : cfg.llmProvider === 'gemini' ? ' | Gemini cloud' : '')
 );
 try {
   fs.mkdirSync(cfg.modelsDir, { recursive: true });
