@@ -3,6 +3,9 @@ const $ = (id) => document.getElementById(id);
 /** Last `/api/settings` JSON — used to merge global bot persona with per-session overrides in Memory. */
 let lastSettingsForGui = null;
 
+/** Avoid reacting to programmatic updates on the Telegram bot power checkbox (if a browser fires `change`). */
+let botPowerSwitchSyncing = false;
+
 /** Tabs nested under the Settings toggle (sidebar). */
 const SETTINGS_SUB_TABS = new Set(['telegram', 'access', 'calendar', 'pending', 'system']);
 
@@ -92,8 +95,6 @@ function updateProviderVisibility() {
   $('wrapLlama').classList.toggle('hidden', p !== 'llama-server');
   $('wrapOpenAi')?.classList.toggle('hidden', p !== 'openai');
   $('wrapGemini')?.classList.toggle('hidden', p !== 'gemini');
-  const wrapSrv = $('wrapServerActions');
-  if (wrapSrv) wrapSrv.classList.toggle('hidden', p !== 'llama-server');
 }
 
 const CHAT_SESSION_STORAGE_KEY = 'guiChatSessionUserId';
@@ -196,7 +197,6 @@ async function loadSettingsIntoForm() {
   $('databasePath').value = s.databasePath || '';
   $('databasePathResolved').textContent = s.databasePathResolved || '';
   $('openBrowserGui').checked = Boolean(s.openBrowserGui);
-  if ($('autoStartLlamaServer')) $('autoStartLlamaServer').checked = Boolean(s.autoStartLlamaServer);
   setWebSearchInputsChecked(Boolean(s.webSearchEnabled));
   $('settingsPath').textContent = s.settingsPath || '';
 
@@ -685,6 +685,32 @@ function startOverviewHardwarePolling() {
   hardwareChartTimer = setInterval(refreshOverviewHardware, HARDWARE_POLL_MS);
 }
 
+function applyTelegramBotToggleUi(st) {
+  const cb = $('inpBotPower');
+  const lab = $('lblBotPower');
+  const sub = $('sidebarBotToggleSub');
+  if (!cb) return;
+  botPowerSwitchSyncing = true;
+  try {
+    if (!st || typeof st !== 'object') {
+      cb.disabled = false;
+      cb.checked = false;
+      lab?.removeAttribute('aria-busy');
+      if (sub) sub.textContent = '?';
+      return;
+    }
+    const running = Boolean(st.running);
+    const starting = Boolean(st.starting);
+    cb.checked = running;
+    cb.disabled = starting;
+    if (starting) lab?.setAttribute('aria-busy', 'true');
+    else lab?.removeAttribute('aria-busy');
+    if (sub) sub.textContent = running ? 'RUNNING' : starting ? 'Starting…' : 'Stopped';
+  } finally {
+    botPowerSwitchSyncing = false;
+  }
+}
+
 async function loadOverview() {
   try {
     const settings = await (await fetch('/api/settings')).json();
@@ -716,7 +742,7 @@ async function loadOverview() {
     const starting = Boolean(st.starting);
     const line = $('overviewTelegramLine');
     if (line) {
-      line.textContent = running ? 'Running' : starting ? 'Starting…' : 'Stopped';
+      line.textContent = running ? 'AI ASSISTANCE RUNNING' : starting ? 'Starting…' : 'Stopped';
     }
     if (running) {
       setStatusLed($('overviewTelegramLed'), 'live');
@@ -725,17 +751,17 @@ async function loadOverview() {
     } else {
       setStatusLed($('overviewTelegramLed'), 'idle');
     }
+    applyTelegramBotToggleUi(st);
   } catch {
     const line = $('overviewTelegramLine');
     if (line) line.textContent = '?';
     setStatusLed($('overviewTelegramLed'), 'unknown');
+    applyTelegramBotToggleUi(null);
   }
 
   try {
     const ss = await (await fetch('/api/llm/server-status')).json();
-    const prov = String(ss.provider || '');
     const online = Boolean(ss.online);
-    const spawned = Boolean(ss.spawnedByApp);
     const lineEl = $('overviewServerLine');
     const subEl = $('overviewServerDetail');
 
@@ -743,8 +769,7 @@ async function loadOverview() {
       lineEl.textContent = online ? 'Online' : 'Offline';
     }
     if (subEl) {
-      subEl.textContent =
-        prov === 'llama-server' && spawned ? 'Started by this app' : '';
+      subEl.textContent = '';
     }
     if (online) {
       setStatusLed($('overviewServerLed'), 'live');
@@ -835,6 +860,96 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+function formatSoulDetailPaneHtml(soul) {
+  const prof =
+    soul.preferences?.profile && typeof soul.preferences.profile === 'object' ? soul.preferences.profile : {};
+  const bp =
+    soul.preferences?.botPersona && typeof soul.preferences.botPersona === 'object'
+      ? soul.preferences.botPersona
+      : {};
+  const chunks = [];
+
+  const profileRows = [
+    ['whoAmI', 'Who I am'],
+    ['work', 'Work / occupation'],
+    ['gender', 'Gender'],
+    ['age', 'Age'],
+    ['addressUserEn', 'Address (EN)'],
+    ['addressUserMy', 'Address (MY)'],
+    ['extra', 'Extra notes'],
+    ['memorySummary', 'Memory summary (full)'],
+  ];
+  const dlParts = [];
+  for (const [key, label] of profileRows) {
+    const v = prof[key];
+    if (v == null || String(v).trim() === '') continue;
+    dlParts.push(`<dt>${escapeHtml(label)}</dt><dd class="msg">${escapeHtml(String(v))}</dd>`);
+  }
+  if (dlParts.length) {
+    chunks.push(
+      `<div class="soul-detail-section"><h4>User profile</h4><dl class="soul-detail-dl">${dlParts.join('')}</dl></div>`
+    );
+  }
+
+  const bpRows = [
+    ['displayName', 'Bot display name'],
+    ['gender', 'Bot gender'],
+    ['style', 'Reply style'],
+    ['role', 'Bot role'],
+    ['addressUserEn', 'Bot address user (EN)'],
+    ['addressUserMy', 'Bot address user (MY)'],
+  ];
+  const bpParts = [];
+  for (const [key, label] of bpRows) {
+    const v = bp[key];
+    if (v == null || String(v).trim() === '') continue;
+    bpParts.push(`<dt>${escapeHtml(label)}</dt><dd class="msg">${escapeHtml(String(v))}</dd>`);
+  }
+  if (bpParts.length) {
+    chunks.push(
+      `<div class="soul-detail-section"><h4>Assistant (bot) persona</h4><dl class="soul-detail-dl">${bpParts.join(
+        ''
+      )}</dl></div>`
+    );
+  }
+
+  const prefs = soul.preferences && typeof soul.preferences === 'object' ? { ...soul.preferences } : {};
+  delete prefs.profile;
+  delete prefs.botPersona;
+  if (Object.keys(prefs).length) {
+    chunks.push(
+      `<div class="soul-detail-section"><h4>Other preferences (JSON)</h4><pre class="soul-detail-pre">${escapeHtml(
+        JSON.stringify(prefs, null, 2)
+      )}</pre></div>`
+    );
+  }
+
+  if (Array.isArray(soul.facts) && soul.facts.length) {
+    chunks.push(
+      `<div class="soul-detail-section"><h4>Facts</h4><pre class="soul-detail-pre">${escapeHtml(
+        JSON.stringify(soul.facts, null, 2)
+      )}</pre></div>`
+    );
+  }
+
+  if (!chunks.length) {
+    return '<p class="hint soul-detail-empty">No extended fields for this row.</p>';
+  }
+  return chunks.join('');
+}
+
+function toggleSoulDetailRow(summaryRow) {
+  const detail = summaryRow.nextElementSibling;
+  if (!detail || !detail.classList.contains('soul-detail-row')) return;
+  if (detail.hasAttribute('hidden')) {
+    detail.removeAttribute('hidden');
+    summaryRow.setAttribute('aria-expanded', 'true');
+  } else {
+    detail.setAttribute('hidden', '');
+    summaryRow.setAttribute('aria-expanded', 'false');
+  }
+}
+
 async function loadSouls() {
   const r = await fetch('/api/data/souls');
   const d = await r.json();
@@ -842,9 +957,15 @@ async function loadSouls() {
     const sum = u.preferences?.profile?.memorySummary
       ? String(u.preferences.profile.memorySummary).slice(0, 120)
       : '';
-    return `<tr><td>${u.user_id}</td><td>${escapeHtml(u.display_name || '')}</td><td class="msg">${escapeHtml(
-      sum || '—'
-    )}</td><td>${escapeHtml(u.updated_at || '')}</td></tr>`;
+    const uid = u.user_id;
+    const detailId = `soul-detail-${uid}`;
+    const head = `<tr class="soul-summary-row" data-soul-user="${uid}" tabindex="0" role="button" aria-expanded="false" aria-controls="${detailId}"><td>${uid}</td><td>${escapeHtml(
+      u.display_name || ''
+    )}</td><td class="msg">${escapeHtml(sum || '—')}</td><td>${escapeHtml(u.updated_at || '')}</td></tr>`;
+    const detail = `<tr class="soul-detail-row" id="${detailId}" hidden><td colspan="4"><div class="soul-detail-pane">${formatSoulDetailPaneHtml(
+      u
+    )}</div></td></tr>`;
+    return head + detail;
   });
   $('soulBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="hint">No rows.</td></tr>';
 }
@@ -1180,7 +1301,6 @@ async function saveAll() {
       maxBrowsePages: $('maxBrowsePages').value,
       databasePath: $('databasePath').value.trim(),
       openBrowserGui: $('openBrowserGui').checked,
-      autoStartLlamaServer: $('autoStartLlamaServer') ? $('autoStartLlamaServer').checked : false,
       webSearchEnabled: $('webSearchEnabled') ? $('webSearchEnabled').checked : false,
     };
     const tok = $('telegramBotToken').value.trim();
@@ -1256,65 +1376,38 @@ $('btnResetTelegram')?.addEventListener('click', async () => {
   }
 });
 
-$('btnStart').addEventListener('click', async () => {
-  setStatus('Starting…', '');
+$('inpBotPower')?.addEventListener('change', async () => {
+  if (botPowerSwitchSyncing) return;
+  const cb = $('inpBotPower');
+  const lab = $('lblBotPower');
+  if (!cb || cb.disabled) return;
+  const wantRun = cb.checked;
+  cb.disabled = true;
+  lab?.setAttribute('aria-busy', 'true');
+  setStatus(wantRun ? 'Starting…' : 'Stopping…', '');
   try {
-    const r = await fetch('/api/bot/start', { method: 'POST' });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Start failed');
-    logLine('Bot started.');
-    setStatus('Bot running.', 'ok');
+    if (wantRun) {
+      const r = await fetch('/api/bot/start', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Start failed');
+      logLine('Bot started.');
+      setStatus('Bot running.', 'ok');
+    } else {
+      const r = await fetch('/api/bot/stop', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Stop failed');
+      logLine('Bot stopped.');
+      setStatus('Stopped.', '');
+    }
     await loadOverview();
   } catch (e) {
     setStatus(e.message, 'err');
-    logLine('Start: ' + e.message);
-  }
-});
-
-$('btnStop').addEventListener('click', async () => {
-  setStatus('Stopping…', '');
-  try {
-    const r = await fetch('/api/bot/stop', { method: 'POST' });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Stop failed');
-    logLine('Bot stopped.');
-    setStatus('Stopped.', '');
+    logLine(wantRun ? 'Start: ' + e.message : 'Stop: ' + e.message);
     await loadOverview();
-  } catch (e) {
-    setStatus(e.message, 'err');
+  } finally {
+    lab?.removeAttribute('aria-busy');
   }
 });
-
-if ($('btnStartServer')) {
-  $('btnStartServer').addEventListener('click', async () => {
-    setStatus('Starting llama-server…', '');
-    try {
-      const r = await fetch('/api/llm/start-server', { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Start server failed');
-      logLine(j.skipped ? 'llama-server already responding.' : 'llama-server started.');
-      setStatus(j.skipped ? 'Server already running.' : 'Server running.', 'ok');
-    } catch (e) {
-      setStatus(e.message, 'err');
-      logLine('Start server: ' + e.message);
-    }
-  });
-}
-if ($('btnStopServer')) {
-  $('btnStopServer').addEventListener('click', async () => {
-    setStatus('Stopping llama-server…', '');
-    try {
-      const r = await fetch('/api/llm/stop-server', { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Stop server failed');
-      logLine('Stop server: process stopped if this app had started it.');
-      setStatus('Stop sent.', '');
-    } catch (e) {
-      setStatus(e.message, 'err');
-      logLine('Stop server: ' + e.message);
-    }
-  });
-}
 
 $('btnRefreshChat').addEventListener('click', () => loadChat().catch(() => {}));
 $('btnRefreshSouls').addEventListener('click', () => loadDataTab().catch((e) => setStatus(e.message, 'err')));
@@ -1421,10 +1514,23 @@ if ($('btnCopyBotPersona')) {
 }
 
 $('panel-data')?.addEventListener('click', (ev) => {
+  const soulRow = ev.target.closest('.soul-summary-row');
+  if (soulRow) {
+    toggleSoulDetailRow(soulRow);
+    return;
+  }
   const tab = ev.target.closest('.mem-stab-link');
   if (!tab || !tab.dataset.memSub) return;
   ev.preventDefault();
   setMemorySubtab(tab.dataset.memSub);
+});
+
+$('panel-data')?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const soulRow = ev.target.closest('.soul-summary-row');
+  if (!soulRow) return;
+  ev.preventDefault();
+  toggleSoulDetailRow(soulRow);
 });
 
 if ($('memSessionSelect')) {

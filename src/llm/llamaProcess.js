@@ -76,8 +76,8 @@ function waitForTcpPort(host, port, maxMs = 60000) {
 
 /**
  * If backend is llama-server and (force GUI start | auto-start flag | env), spawn engine/llama-server.exe.
- * @param {boolean} [force] When true, start whenever provider is llama-server (Control Panel "Start server").
- * Call before createBot() with force=false for normal autostart-on-bot behavior.
+ * @param {boolean} [force] When true, start whenever provider is llama-server (e.g. Control Panel Start bot).
+ * When false, start only if autoStartLlamaServer / AUTO_START_LLAMA_SERVER (e.g. headless `src/index.js`).
  */
 export async function startLlamaServerIfConfigured(force = false) {
   const c = getConfig();
@@ -129,7 +129,7 @@ export async function startLlamaServerIfConfigured(force = false) {
       if (!weStarted) {
         logger.warn(
           `llama-server is already listening at ${url} but was not started by this app. ` +
-            `It will keep serving whatever GGUF it was launched with. To use "${path.basename(gguf)}", stop that process and click **Start server** here, or run: llama-server.exe -m "${gguf}" ...`
+            `It will keep serving whatever GGUF it was launched with. To use "${path.basename(gguf)}", stop that process and start the bot again from the Control Panel, or run: llama-server.exe -m "${gguf}" ...`
         );
       }
       logger.info('llama-server already responding on port; not starting another process.');

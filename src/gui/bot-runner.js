@@ -27,7 +27,7 @@ export async function startBotFromGui() {
     reloadConfig();
     assertBotConfigReady();
     getDb();
-    const llama = await startLlamaServerIfConfigured(false);
+    const llama = await startLlamaServerIfConfigured(true);
     if (!llama.ok) {
       return { ok: false, error: llama.error || 'Could not start llama-server' };
     }

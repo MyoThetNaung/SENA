@@ -87,9 +87,30 @@
             </div>
           </div>
         </nav>
-        <div class="sidebar-actions">
-          <button type="button" id="btnStart" class="success wide">Start bot</button>
-          <button type="button" id="btnStop" class="danger wide">Stop bot</button>
+        <div class="sidebar-bottom">
+          <div class="sidebar-actions">
+            <div class="sidebar-bot-power power-switch-wrap">
+              <div class="sidebar-bot-power-head">
+                <span class="sidebar-bot-power-title">AI assistance</span>
+                <span id="sidebarBotToggleSub" class="sidebar-bot-power-state">…</span>
+              </div>
+              <label for="inpBotPower" class="switch bot-power-switch" id="lblBotPower" aria-label="Turn AI assistance (Telegram bot) on or off">
+                <input type="checkbox" id="inpBotPower" />
+                <span>Stop</span>
+                <span>Start</span>
+              </label>
+            </div>
+          </div>
+          <footer class="sidebar-footer" aria-label="Credits">
+            <div class="sidebar-footer-graphic" aria-hidden="true">
+              <span class="sidebar-footer-glow"></span>
+              <span class="sidebar-footer-ornament"></span>
+              <span class="sidebar-footer-glow sidebar-footer-glow--flip"></span>
+            </div>
+            <p class="sidebar-footer-tag">
+              Powered By <span class="sidebar-footer-brand">SENA</span>
+            </p>
+          </footer>
         </div>
       </aside>
       <main class="main">
@@ -115,7 +136,7 @@
 
             <div class="status-card" id="overviewCardTelegram">
               <div class="status-card-head">
-                <span class="status-card-label">Telegram bot</span>
+                <span class="status-card-label">AI assistance</span>
                 <span id="overviewTelegramLed" class="status-led" title="" aria-hidden="true"></span>
               </div>
               <div id="overviewTelegramLine" class="status-card-value">…</div>
@@ -321,10 +342,10 @@
         <section class="tab-panel" id="panel-engine">
           <h1>Engine &amp; models</h1>
           <p class="lead">
-            <strong>Local:</strong> Ollama or llama.cpp <code>llama-server</code> — GGUF under <code>models/</code>,
-            <code>llama-server.exe</code> in <code>engine/</code>.
-            <strong>Cloud:</strong> OpenAI (ChatGPT-compatible API) or Google Gemini — paste an API key, pick a model
-            from the list, then Save.
+            Choose <strong>Ollama</strong>, the <strong>llama.cpp</strong> server backend, or a cloud provider
+            (<strong>OpenAI</strong> or <strong>Google Gemini</strong>) with an API key. Whenever you change the
+            <strong>LLM backend</strong> or the <strong>active model</strong>, click <strong>Save settings</strong> so
+            the configuration is persisted and applied consistently.
           </p>
 
           <div class="card">
@@ -336,10 +357,6 @@
               <option value="openai">OpenAI — ChatGPT API (cloud)</option>
               <option value="gemini">Google Gemini API (cloud)</option>
             </select>
-            <p class="hint">
-              Changing the backend reloads models and clears the Active model to <strong>Select AI model</strong> until
-              you pick one. URLs/keys still come from saved settings until you <strong>Save settings</strong>.
-            </p>
 
             <div id="wrapOpenAi" class="hidden">
               <label>OpenAI API key (<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">get a key</a>)</label>
@@ -359,18 +376,6 @@
             <div id="wrapLlama" class="hidden">
               <label>llama-server base URL</label>
               <input type="text" id="llamaServerUrl" placeholder="http://127.0.0.1:8080" />
-              <p class="hint">
-                Use <strong>Start server</strong> below Active model (next to Save settings) to launch
-                <code>engine/llama-server.exe</code> with your selected GGUF (URL must match <code>--host</code> /
-                <code>--port</code>). Or run
-                <code>llama-server.exe</code> manually. Switch to Ollama above if you use that instead.
-                The Overview tab reads the <strong>saved</strong> base URL — click <strong>Save settings</strong> after
-                you change host or port.
-              </p>
-              <label class="inline"
-                ><input type="checkbox" id="autoStartLlamaServer" /> Also auto-start llama-server when you click
-                <strong>Start bot</strong> (same binary + GGUF rules)</label
-              >
             </div>
 
             <label>Active model</label>
@@ -380,10 +385,6 @@
             </div>
             <div class="engine-save-actions">
               <button type="button" id="btnSave">Save settings</button>
-              <div id="wrapServerActions" class="engine-server-actions">
-                <button type="button" id="btnStartServer">Start server</button>
-                <button type="button" id="btnStopServer">Stop server</button>
-              </div>
             </div>
           </div>
         </section>
@@ -670,6 +671,7 @@
           >
           <div class="card">
             <h2>All soul rows (overview)</h2>
+            <p class="hint">Click a row (or press Enter / Space when focused) to expand full profile, bot persona, facts, and other preferences.</p>
             <button type="button" id="btnRefreshSouls" class="primary ghost">Refresh table</button>
             <div class="table-wrap">
               <table class="data-table">
