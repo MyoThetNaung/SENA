@@ -24,7 +24,7 @@ function mergeBotPersonaForUserId(userId) {
   const soul = getSoul(uid);
   const raw = soul.preferences?.botPersona;
   const local = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const keys = ['displayName', 'gender', 'style', 'role', 'addressUserEn', 'addressUserMy'];
+  const keys = ['displayName', 'displayNameMy', 'gender', 'style', 'role', 'addressUserEn', 'addressUserMy'];
   const out = { ...global };
   for (const k of keys) {
     const v = local[k];
@@ -45,6 +45,7 @@ function formatBotPersonaBlock(persona) {
   const p = persona || {};
   const lines = [];
   if (p.displayName) lines.push(`Assistant name: ${p.displayName}`);
+  if (p.displayNameMy) lines.push(`Assistant name (Myanmar): ${p.displayNameMy}`);
   if (p.role) lines.push(`Role / what you do: ${p.role}`);
   if (p.gender) lines.push(`Persona gender (for tone): ${p.gender}`);
   if (p.style) lines.push(`Reply style: ${p.style}`);
@@ -53,11 +54,48 @@ function formatBotPersonaBlock(persona) {
   return lines.join('\n');
 }
 
+const RUNTIME_LLM_LABELS = {
+  ollama: 'Ollama (local)',
+  'llama-server': 'llama.cpp server (local OpenAI-compatible API)',
+  openai: 'OpenAI API (cloud)',
+  gemini: 'Google Gemini API (cloud)',
+};
+
+function getRuntimeLlmDescriptors() {
+  const c = getConfig();
+  const id = String(c.llmProvider || '').trim();
+  const backendLabel = RUNTIME_LLM_LABELS[id] || id || 'unknown';
+  const modelId = String(c.llmModel || '').trim() || '(not set)';
+  return { backendLabel, modelId, providerId: id };
+}
+
+/** Reply built only from app settings — use when the local LLM might hallucinate (e.g. Gemma → “Gemini”). */
+export function deterministicRuntimeIdentityReply() {
+  const { backendLabel, modelId } = getRuntimeLlmDescriptors();
+  return (
+    `Configured in SENA (from your settings — not guessed by the model):\n` +
+    `• LLM backend: ${backendLabel}\n` +
+    `• Active model: ${modelId}`
+  );
+}
+
+/** Facts about the configured LLM so the model does not guess (e.g. wrong vendor name). */
+function runtimeLlmIdentityBlock() {
+  const { backendLabel, modelId } = getRuntimeLlmDescriptors();
+  return (
+    '\n\n---\nRuntime LLM (authoritative — when the user asks which model, AI engine, or backend you use, answer only from this block):\n' +
+    `- Backend: ${backendLabel}\n` +
+    `- Active model id: ${modelId}\n` +
+    'Do not invent a vendor or model name. You may briefly explain what the active model id refers to if the user asks.'
+  );
+}
+
 /** @param {number} [userId] Chat / Telegram user id — per-soul bot persona overrides global settings when set. */
 export function baseSystemPrompt(userId) {
   const persona = formatBotPersonaBlock(mergeBotPersonaForUserId(userId));
   let s = BASE_SYSTEM;
   if (persona) s += `\n\n---\n${persona}`;
+  s += runtimeLlmIdentityBlock();
   if (!getConfig().webSearchEnabled) {
     s +=
       '\n\nYou do not have live web search. Answer from this conversation, user memory, and general knowledge; ' +

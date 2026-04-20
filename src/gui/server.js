@@ -258,6 +258,7 @@ export function createGuiApp() {
         const bp = b.botPersona;
         patch.botPersona = {
           displayName: typeof bp.displayName === 'string' ? bp.displayName : '',
+          displayNameMy: typeof bp.displayNameMy === 'string' ? bp.displayNameMy : '',
           gender: typeof bp.gender === 'string' ? bp.gender : '',
           style: typeof bp.style === 'string' ? bp.style : '',
           role: typeof bp.role === 'string' ? bp.role : '',

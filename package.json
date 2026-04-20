@@ -1,24 +1,29 @@
 {
   "name": "local-telegram-ai-assistant",
+  "productName": "SENA",
   "version": "1.0.0",
   "description": "SENA (Smart Engine for Notes & Action) AI Assistant — Telegram, Ollama/llama-server, SQLite, Puppeteer",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "gui": "node src/gui-main.js",
+    "gui": "electron src/electron-main.js",
+    "gui:web": "node src/gui-main.js",
     "dev": "node --watch src/index.js",
-    "build": "node --check src/index.js && node --check src/gui-main.js"
+    "build": "node --check src/index.js && node --check src/gui-main.js && node --check src/electron-main.js && node --check src/electron-preload.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
-    "better-sqlite3": "^11.6.0",
+    "better-sqlite3": "^12.9.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "node-telegram-bot-api": "^0.66.0",
     "puppeteer": "^23.6.0",
     "winston": "^3.15.0"
+  },
+  "devDependencies": {
+    "electron": "^41.2.1"
   }
 }

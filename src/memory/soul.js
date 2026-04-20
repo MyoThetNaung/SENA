@@ -67,6 +67,7 @@ export function normalizeSoulBotPersona(raw) {
   const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   return {
     displayName: String(o.displayName ?? '').trim(),
+    displayNameMy: String(o.displayNameMy ?? '').trim(),
     gender: String(o.gender ?? '').trim(),
     style: String(o.style ?? '').trim(),
     role: String(o.role ?? '').trim(),

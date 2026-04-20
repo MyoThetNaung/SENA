@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SENA (Smart Engine for Notes &amp; Action) AI Assistant — Control Panel</title>
+    <title>SENA</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -13,6 +13,32 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <header class="window-bar" aria-label="Window controls">
+      <div class="window-bar-brand" title="SENA">
+        <span class="window-bar-title">SENA</span>
+      </div>
+      <div class="window-controls">
+        <button class="win-btn" id="winMinimize" type="button" aria-label="Minimize">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+        <button class="win-btn" id="winMaximize" type="button" aria-label="Maximize">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+          </svg>
+        </button>
+        <button class="win-btn close" id="winClose" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <canvas id="network" aria-hidden="true"></canvas>
+    <div class="cursor" aria-hidden="true"></div>
+    <div class="cursor-ring" aria-hidden="true"></div>
     <div class="shell">
       <aside class="sidebar">
         <div class="brand" title="SENA (Smart Engine for Notes &amp; Action) AI Assistant">
@@ -89,6 +115,28 @@
         </nav>
         <div class="sidebar-bottom">
           <div class="sidebar-actions">
+            <div id="sidebarAiCircleWrap" class="sidebar-ai-circle-wrap hidden" aria-hidden="true">
+              <div class="ai-circle">
+                <svg viewBox="0 0 120 120">
+                  <defs>
+                    <linearGradient id="aiCircleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stop-color="#8b5cf6" />
+                      <stop offset="100%" stop-color="#60a5fa" />
+                    </linearGradient>
+                    <linearGradient id="aiCircleGradAlt" x1="100%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="#38bdf8" />
+                      <stop offset="100%" stop-color="#a78bfa" />
+                    </linearGradient>
+                  </defs>
+                  <circle cx="60" cy="60" r="50" class="ring-bg"></circle>
+                  <circle cx="60" cy="60" r="42" class="ring-inner-bg"></circle>
+                  <circle cx="60" cy="60" r="50" class="ring-active"></circle>
+                  <circle cx="60" cy="60" r="42" class="ring-active-alt"></circle>
+                  <circle cx="60" cy="60" r="33" class="ring-scan"></circle>
+                  <circle cx="60" cy="60" r="6" class="core"></circle>
+                </svg>
+              </div>
+            </div>
             <div class="sidebar-bot-power power-switch-wrap">
               <div class="sidebar-bot-power-head">
                 <span class="sidebar-bot-power-title">AI assistance</span>
@@ -104,7 +152,7 @@
           <footer class="sidebar-footer" aria-label="Credits">
             <div class="sidebar-footer-graphic" aria-hidden="true">
               <span class="sidebar-footer-glow"></span>
-              <span class="sidebar-footer-ornament"></span>
+              <span id="sidebarFooterOrnament" class="sidebar-footer-ornament"></span>
               <span class="sidebar-footer-glow sidebar-footer-glow--flip"></span>
             </div>
             <p class="sidebar-footer-tag">
@@ -117,7 +165,39 @@
         <p id="status" class="statusbar" aria-live="polite"></p>
 
         <section class="tab-panel active" id="panel-overview">
-          <h1>Overview</h1>
+          <h1>
+            <span>Overview</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleOverview" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleOverview">
+                <div class="neo-track">
+                  <div class="neo-background-layer"></div>
+                  <div class="neo-grid-layer"></div>
+                  <div class="neo-track-highlight"></div>
+                </div>
+                <div class="neo-thumb">
+                  <div class="neo-thumb-ring"></div>
+                  <div class="neo-thumb-core">
+                    <div class="neo-thumb-icon">
+                      <div class="neo-thumb-wave"></div>
+                      <div class="neo-thumb-pulse"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="neo-gesture-area"></div>
+                <div class="neo-interaction-feedback">
+                  <div class="neo-ripple"></div>
+                  <div class="neo-progress-arc"></div>
+                </div>
+                <div class="neo-status">
+                  <div class="neo-status-indicator">
+                    <div class="neo-status-dot"></div>
+                    <div class="neo-status-text"></div>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </h1>
 
           <div class="overview-status-grid">
             <div class="status-card" id="overviewCardBotName">
@@ -340,16 +420,26 @@
         </section>
 
         <section class="tab-panel" id="panel-engine">
-          <h1>Engine &amp; models</h1>
-          <p class="lead">
-            Choose <strong>Ollama</strong>, the <strong>llama.cpp</strong> server backend, or a cloud provider
-            (<strong>OpenAI</strong> or <strong>Google Gemini</strong>) with an API key. Whenever you change the
-            <strong>LLM backend</strong> or the <strong>active model</strong>, click <strong>Save settings</strong> so
-            the configuration is persisted and applied consistently.
-          </p>
-
+          <h1>
+            <span>Engine &amp; models</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleEngine" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleEngine">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <div class="card">
             <h2>Backend</h2>
+            <p class="lead">
+              Choose <strong>Ollama</strong>, the <strong>llama.cpp</strong> server backend, or a cloud provider
+              (<strong>OpenAI</strong> or <strong>Google Gemini</strong>) with an API key. Whenever you change the
+              <strong>LLM backend</strong> or the <strong>active model</strong>, click <strong>Save settings</strong> so
+              the configuration is persisted and applied consistently.
+            </p>
             <label>LLM backend</label>
             <select id="llmProvider">
               <option value="ollama">Ollama (local)</option>
@@ -390,7 +480,18 @@
         </section>
 
         <section class="tab-panel" id="panel-telegram">
-          <h1>Telegram</h1>
+          <h1>
+            <span>Telegram</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleTelegram" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleTelegram">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <div class="card">
             <label>Bot token (only required field)</label>
             <div class="telegram-token-row">
@@ -426,7 +527,18 @@
         </section>
 
         <section class="tab-panel" id="panel-access">
-          <h1>Who can use the bot</h1>
+          <h1>
+            <span>Who can use the bot</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleAccess" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleAccess">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <p class="lead">
             When someone messages your bot for the first time, they appear here as <strong>pending</strong>. Approve to
             let them chat, or deny to block.
@@ -480,11 +592,18 @@
         </section>
 
         <section class="tab-panel" id="panel-data">
-          <h1>Memory &amp; bot persona</h1>
-          <p class="lead">
-            Pick a <strong>session</strong> (Telegram user id or Control panel), then use the tabs for assistant identity,
-            user memory, or the soul table. Assistant fields use global defaults where a session value is left empty.
-          </p>
+          <h1>
+            <span>Memory &amp; bot persona</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleData" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleData">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
 
           <div class="toolbar mem-toolbar mem-toolbar-session">
             <div class="session-select-wrap">
@@ -507,7 +626,7 @@
                   data-mem-sub="bot"
                   aria-selected="true"
                   aria-controls="memPaneBot"
-                  >Assistant (bot) identity</a>
+                  >Assistant identity</a>
               </li>
               <li role="presentation">
                 <a
@@ -536,15 +655,15 @@
 
           <div class="mem-subpane" id="memPaneBot" role="tabpanel" aria-labelledby="memSubtabBot" data-mem-sub="bot">
           <div class="card mem-bot-card">
-            <h2>Assistant (bot) identity</h2>
-            <p class="hint">
-              Per <strong>session</strong> in SQLite <code>soul.preferences.botPersona</code>. Empty fields fall back to
-              global defaults in <code>data/settings.json</code> for that chat only.
-            </p>
+            <h2>Assistant identity</h2>
             <div class="mem-grid mem-bot-grid">
               <div>
                 <label>Bot display name</label>
                 <input type="text" id="botDisplayName" placeholder="e.g. AI_AGENT_NG2" />
+              </div>
+              <div>
+                <label>Bot name (Myanmar)</label>
+                <input type="text" id="botDisplayNameMy" placeholder="ဥပမာ — ဆီနာ" />
               </div>
               <div>
                 <label>Bot gender (persona)</label>
@@ -589,7 +708,6 @@
           >
           <div class="card mem-user-card">
             <h2>User memory by session</h2>
-            <p class="hint">Stored per Telegram user id in SQLite <code>soul</code> table — same data the bot uses in chat.</p>
             <div class="mem-grid">
               <div>
                 <label>Display name</label>
@@ -631,19 +749,11 @@
                 <textarea id="memWhoAmI" rows="2" placeholder="Short self-description"></textarea>
               </div>
               <div class="mem-span2">
-                <label>Work / occupation</label>
-                <textarea id="memWork" rows="2" placeholder="Job, studies, etc."></textarea>
-              </div>
-              <div class="mem-span2">
                 <label>Other notes</label>
                 <textarea id="memExtra" rows="2" placeholder="Anything else to remember"></textarea>
               </div>
               <div class="mem-span2">
                 <label>Conversation memory</label>
-                <p class="hint">
-                  Auto-updated after chats (rolling summary of what you discussed). You can edit here; bot identity and
-                  fields above are only changed in this panel, not from Telegram text tricks.
-                </p>
                 <textarea
                   id="memMemorySummary"
                   rows="8"
@@ -664,11 +774,6 @@
 
           <div class="card mem-danger-card">
             <h2>Reset all stored memory</h2>
-            <p class="mem-danger-hint">
-              Removes <strong>all</strong> rows from user memory (soul), <strong>all</strong> chat log lines, pending
-              confirmations, and calendar events (events are tied to soul). Does <strong>not</strong> remove Telegram
-              access list or bot persona in settings.
-            </p>
             <button type="button" id="btnClearAllMemory" class="danger wide">Clear ALL memory (whole database)</button>
           </div>
           </div>
@@ -683,7 +788,6 @@
           >
           <div class="card">
             <h2>All soul rows (overview)</h2>
-            <p class="hint">Click a row (or press Enter / Space when focused) to expand full profile, bot persona, facts, and other preferences.</p>
             <button type="button" id="btnRefreshSouls" class="primary ghost">Refresh table</button>
             <div class="table-wrap">
               <table class="data-table">
@@ -703,7 +807,18 @@
         </section>
 
         <section class="tab-panel" id="panel-chat">
-          <h1>Chat</h1>
+          <h1>
+            <span>Chat</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleChat" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleChat">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <div class="card chat-console">
             <div class="toolbar chat-toolbar">
               <div class="session-select-wrap">
@@ -752,7 +867,18 @@
         </section>
 
         <section class="tab-panel" id="panel-calendar">
-          <h1>Calendar</h1>
+          <h1>
+            <span>Calendar</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleCalendar" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleCalendar">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <button type="button" id="btnRefreshCal" class="primary ghost">Refresh</button>
           <div class="table-wrap">
             <table class="data-table">
@@ -770,7 +896,18 @@
         </section>
 
         <section class="tab-panel" id="panel-pending">
-          <h1>Pending confirmations</h1>
+          <h1>
+            <span>Pending confirmations</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgTogglePending" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgTogglePending">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <button type="button" id="btnRefreshPending" class="primary ghost">Refresh</button>
           <div class="table-wrap">
             <table class="data-table">
@@ -789,7 +926,18 @@
         </section>
 
         <section class="tab-panel" id="panel-system">
-          <h1>System</h1>
+          <h1>
+            <span>System</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleSystem" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleSystem">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
           <div class="card">
             <label>SQLite database path</label>
             <input type="text" id="databasePath" />
@@ -862,6 +1010,28 @@
 
         <pre id="log" class="log"></pre>
       </main>
+    </div>
+    <div class="scroll-indicator" id="scrollIndicator" aria-hidden="true">
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
     </div>
     <script src="/app.js"></script>
   </body>

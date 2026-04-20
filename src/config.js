@@ -118,6 +118,7 @@ function buildConfig() {
   const rawPersona = settings.botPersona && typeof settings.botPersona === 'object' ? settings.botPersona : {};
   const botPersona = {
     displayName: String(rawPersona.displayName ?? '').trim(),
+    displayNameMy: String(rawPersona.displayNameMy ?? '').trim(),
     gender: String(rawPersona.gender ?? '').trim(),
     style: String(rawPersona.style ?? '').trim(),
     role: String(rawPersona.role ?? '').trim(),

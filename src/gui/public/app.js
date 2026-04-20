@@ -1,4 +1,6 @@
 const $ = (id) => document.getElementById(id);
+const NEURAL_BG_STORAGE_KEY = 'guiNeuralBackgroundEnabled';
+let neuralBackgroundEnabled = true;
 
 /** Last `/api/settings` JSON — used to merge global bot persona with per-session overrides in Memory. */
 let lastSettingsForGui = null;
@@ -44,6 +46,16 @@ function setMemorySubtab(which) {
 
 function setStatus(msg, kind) {
   const el = $('status');
+  const text = String(msg || '').trim();
+  if (text) {
+    const level = kind === 'err' ? 'error' : 'info';
+    logLine(`[${level}] ${text}`);
+  }
+  if (kind !== 'err') {
+    el.textContent = '';
+    el.className = 'statusbar';
+    return;
+  }
   el.textContent = msg || '';
   el.className = 'statusbar ' + (kind || '');
 }
@@ -54,12 +66,369 @@ function logLine(line) {
   el.textContent = `[${t}] ${line}\n` + el.textContent;
 }
 
+function initWindowControls() {
+  const controls = window.senaWindowControls;
+  if (!controls) return;
+  $('winMinimize')?.addEventListener('click', () => controls.minimize());
+  $('winMaximize')?.addEventListener('click', () => controls.toggleMaximize());
+  $('winClose')?.addEventListener('click', () => controls.close());
+}
+
+let lastConsoleStatusSignature = '';
+
+async function refreshConsoleStatusLine() {
+  try {
+    const [botRes, llmRes, settingsRes] = await Promise.all([
+      fetch('/api/bot/status'),
+      fetch('/api/llm/server-status'),
+      fetch('/api/settings'),
+    ]);
+    const bot = await botRes.json();
+    const llm = await llmRes.json();
+    const settings = await settingsRes.json();
+    if (!botRes.ok || !llmRes.ok || !settingsRes.ok) return;
+
+    const botState = bot.running ? 'running' : bot.starting ? 'starting' : 'stopped';
+    const llmState = llm.online ? 'online' : 'offline';
+    const provider = String(settings.llmProvider || 'unknown');
+    const model = String(settings.llmModel || '—').trim() || '—';
+    const sig = `${botState}|${llmState}|${provider}|${model}`;
+    if (sig === lastConsoleStatusSignature) return;
+    lastConsoleStatusSignature = sig;
+    logLine(`Status: bot ${botState} | LLM ${llmState} | backend ${provider} | model ${model}`);
+  } catch {
+    /* ignore status refresh errors */
+  }
+}
+
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function initNeuralBackground() {
+  const canvas = $('network');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  let nodes = [];
+  const NODE_COUNT = 128;
+  const MAX_DISTANCE = 170;
+  const MOUSE_LINK_DISTANCE = 240;
+  let tick = 0;
+  const mouse = { x: -9999, y: -9999, active: false };
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  function resetNodes() {
+    nodes = [];
+    for (let i = 0; i < NODE_COUNT; i++) {
+      nodes.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        vx: (Math.random() - 0.5) * 0.45,
+        vy: (Math.random() - 0.5) * 0.45,
+        radius: Math.random() * 2 + 1,
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
+  function drawLink(x1, y1, x2, y2, strength) {
+    ctx.strokeStyle = `rgba(120,150,255,${strength * 0.42})`;
+    ctx.lineWidth = 0.8 + strength * 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  function animate() {
+    if (!neuralBackgroundEnabled) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      requestAnimationFrame(animate);
+      return;
+    }
+    tick += 0.018;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const dx = nodes[i].x - nodes[j].x;
+        const dy = nodes[i].y - nodes[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < MAX_DISTANCE) {
+          const opacity = 1 - dist / MAX_DISTANCE;
+          drawLink(nodes[i].x, nodes[i].y, nodes[j].x, nodes[j].y, opacity);
+        }
+      }
+    }
+
+    for (const node of nodes) {
+      if (mouse.active) {
+        const mdx = node.x - mouse.x;
+        const mdy = node.y - mouse.y;
+        const md = Math.sqrt(mdx * mdx + mdy * mdy);
+        if (md < MOUSE_LINK_DISTANCE) {
+          drawLink(node.x, node.y, mouse.x, mouse.y, 1 - md / MOUSE_LINK_DISTANCE);
+        }
+      }
+
+      const pulse = 0.65 + 0.35 * Math.sin(tick + node.phase);
+      const r = node.radius * (0.9 + pulse * 0.35);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(190,210,255,${0.72 + pulse * 0.24})`;
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r * 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(120,150,255,${0.04 + pulse * 0.05})`;
+      ctx.fill();
+
+      node.x += node.vx;
+      node.y += node.vy;
+
+      if (node.x < 0 || node.x > canvas.width) node.vx *= -1;
+      if (node.y < 0 || node.y > canvas.height) node.vy *= -1;
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  resizeCanvas();
+  resetNodes();
+  animate();
+  window.addEventListener('pointermove', (ev) => {
+    mouse.x = ev.clientX;
+    mouse.y = ev.clientY;
+    mouse.active = true;
+  });
+  window.addEventListener('pointerleave', () => {
+    mouse.active = false;
+  });
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    resetNodes();
+  });
+}
+
+function applyNeuralBackgroundUi(enabled) {
+  neuralBackgroundEnabled = Boolean(enabled);
+  document.body.classList.toggle('neural-bg-off', !neuralBackgroundEnabled);
+  document.querySelectorAll('.neural-bg-toggle').forEach((input) => {
+    input.checked = neuralBackgroundEnabled;
+  });
+}
+
+function initNeuralBackgroundToggle() {
+  const saved = localStorage.getItem(NEURAL_BG_STORAGE_KEY);
+  const enabled = saved == null ? true : saved === '1';
+  applyNeuralBackgroundUi(enabled);
+  document.querySelectorAll('.neural-bg-toggle').forEach((input) => {
+    input.addEventListener('change', () => {
+      applyNeuralBackgroundUi(Boolean(input.checked));
+      localStorage.setItem(NEURAL_BG_STORAGE_KEY, neuralBackgroundEnabled ? '1' : '0');
+    });
+  });
+}
+
+function updateScrollIndicatorScrollable() {
+  const scroller = document.querySelector('.main');
+  const indicator = $('scrollIndicator');
+  if (!scroller || !indicator) return;
+  const canScroll = scroller.scrollHeight > scroller.clientHeight + 2;
+  indicator.classList.toggle('is-scrollable', canScroll);
+  scroller.classList.toggle('has-scroll-indicator', canScroll);
+  if (!canScroll) indicator.classList.remove('up', 'down');
+}
+
+function initScrollbarArrowGlow() {
+  const scroller = document.querySelector('.main');
+  const indicator = $('scrollIndicator');
+  if (!scroller || !indicator) return;
+
+  let prevTop = scroller.scrollTop;
+  let clearTimer = null;
+  let resizeTimer = null;
+
+  scroller.addEventListener(
+    'scroll',
+    () => {
+      if (!indicator.classList.contains('is-scrollable')) return;
+      const currentTop = scroller.scrollTop;
+      const dir = currentTop > prevTop ? 'down' : currentTop < prevTop ? 'up' : '';
+      prevTop = currentTop;
+      if (!dir) return;
+      indicator.classList.remove('up', 'down');
+      /* Restart CSS animation wave (sequential glow) */
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          indicator.classList.add(dir);
+        });
+      });
+      if (clearTimer) clearTimeout(clearTimer);
+      /* Last delay 0.405s + one arrow duration ~0.48s */
+      clearTimer = setTimeout(() => {
+        indicator.classList.remove('up', 'down');
+      }, 1000);
+    },
+    { passive: true }
+  );
+
+  const scheduleMeasure = () => {
+    window.requestAnimationFrame(() => updateScrollIndicatorScrollable());
+  };
+
+  window.addEventListener(
+    'resize',
+    () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(scheduleMeasure, 80);
+    },
+    { passive: true }
+  );
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => scheduleMeasure());
+    ro.observe(scroller);
+    document.querySelectorAll('.tab-panel').forEach((panel) => ro.observe(panel));
+  }
+
+  scheduleMeasure();
+}
+
+function initCustomCursor() {
+  const cursor = document.querySelector('.cursor');
+  const ring = document.querySelector('.cursor-ring');
+  if (!cursor || !ring) return;
+  if (!window.matchMedia('(pointer: fine)').matches) return;
+
+  document.body.classList.add('custom-cursor-active');
+
+  let mouseX = window.innerWidth / 2;
+  let mouseY = window.innerHeight / 2;
+  let ringX = mouseX;
+  let ringY = mouseY;
+  let visible = false;
+  let hovering = false;
+  let pressed = false;
+  let textMode = false;
+  let targetMode = false;
+  let targetEl = null;
+  let ringW = 35;
+  let ringH = 35;
+
+  const textSelector =
+    'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]), textarea, [contenteditable="true"]';
+  const sideMenuSelector =
+    '#mainNav .nav-item, #mainNav .nav-settings-toggle, #lblBotPower, .bot-power-switch, .neo-toggle, .neo-toggle-container';
+
+  function setVisible(on) {
+    visible = on;
+    cursor.style.opacity = on ? '1' : '0';
+    ring.style.opacity = on ? '1' : '0';
+  }
+
+  function applyRingVisual() {
+    cursor.classList.toggle('cursor-text-mode', textMode);
+    if (textMode) {
+      ring.style.opacity = '0';
+      ring.style.transform = 'translate(-50%, -50%) scale(0.4)';
+      ring.style.borderColor = 'rgba(120,150,255,0.6)';
+      return;
+    }
+    ring.style.opacity = visible ? '1' : '0';
+    ring.classList.toggle('cursor-ring-target', targetMode);
+    let scale = 1;
+    if (!targetMode) scale = hovering ? 1.8 : 1;
+    if (pressed) scale *= 0.92;
+    ring.style.transform = `translate(-50%, -50%) scale(${scale})`;
+    if (targetMode) {
+      ring.style.borderColor = 'rgba(120,170,255,0.9)';
+    } else {
+      ring.style.borderColor = hovering ? 'rgba(236,72,153,0.8)' : 'rgba(120,150,255,0.6)';
+    }
+  }
+
+  function setHover(on) {
+    hovering = on;
+    applyRingVisual();
+  }
+
+  function setTarget(el) {
+    targetEl = el || null;
+    targetMode = Boolean(targetEl);
+    applyRingVisual();
+  }
+
+  document.addEventListener('pointermove', (e) => {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    cursor.style.left = `${mouseX}px`;
+    cursor.style.top = `${mouseY}px`;
+    if (!visible) setVisible(true);
+  });
+
+  document.addEventListener('pointerleave', () => setVisible(false));
+  document.addEventListener('pointerenter', () => setVisible(true));
+
+  document.addEventListener('pointerover', (e) => {
+    textMode = Boolean(e.target.closest(textSelector));
+    setTarget(e.target.closest(sideMenuSelector));
+    const hit = e.target.closest('button, a, .clickable, [role="button"], input, select, textarea, label');
+    setHover(Boolean(hit));
+  });
+
+  document.addEventListener('pointerdown', () => {
+    pressed = true;
+    applyRingVisual();
+  });
+  document.addEventListener('pointerup', () => {
+    pressed = false;
+    const elAtPoint = document.elementFromPoint(mouseX, mouseY);
+    const hit = elAtPoint?.closest(
+      'button, a, .clickable, [role="button"], input, select, textarea, label'
+    );
+    textMode = Boolean(elAtPoint?.closest(textSelector));
+    setTarget(elAtPoint?.closest(sideMenuSelector));
+    setHover(Boolean(hit));
+  });
+
+  function animate() {
+    let tx = mouseX;
+    let ty = mouseY;
+    let tw = 35;
+    let th = 35;
+    if (targetMode && targetEl?.isConnected) {
+      const rect = targetEl.getBoundingClientRect();
+      tx = rect.left + rect.width / 2;
+      ty = rect.top + rect.height / 2;
+      tw = Math.max(42, rect.width + 12);
+      th = Math.max(28, rect.height + 8);
+    } else if (targetMode) {
+      setTarget(null);
+    }
+
+    const follow = targetMode ? 0.32 : 0.28;
+    ringX += (tx - ringX) * follow;
+    ringY += (ty - ringY) * follow;
+    ringW += (tw - ringW) * follow;
+    ringH += (th - ringH) * follow;
+    ring.style.left = `${ringX}px`;
+    ring.style.top = `${ringY}px`;
+    ring.style.width = `${ringW}px`;
+    ring.style.height = `${ringH}px`;
+    requestAnimationFrame(animate);
+  }
+  animate();
 }
 
 /**
@@ -342,6 +711,9 @@ function showTab(name) {
   if (name === 'calendar') loadCalendar();
   if (name === 'pending') loadPending();
   syncSettingsGroupForTab(name);
+  queueMicrotask(() => {
+    requestAnimationFrame(() => updateScrollIndicatorScrollable());
+  });
 }
 
 function setStatusLed(el, state) {
@@ -721,6 +1093,8 @@ function applyTelegramBotToggleUi(st) {
   const cb = $('inpBotPower');
   const lab = $('lblBotPower');
   const sub = $('sidebarBotToggleSub');
+  const circle = $('sidebarAiCircleWrap');
+  const footerOrb = $('sidebarFooterOrnament');
   if (!cb) return;
   botPowerSwitchSyncing = true;
   try {
@@ -729,6 +1103,10 @@ function applyTelegramBotToggleUi(st) {
       cb.checked = false;
       lab?.removeAttribute('aria-busy');
       if (sub) sub.textContent = '?';
+      if (circle) {
+        circle.classList.remove('hidden', 'is-running');
+      }
+      footerOrb?.classList.remove('running-glow');
       return;
     }
     const running = Boolean(st.running);
@@ -738,12 +1116,35 @@ function applyTelegramBotToggleUi(st) {
     if (starting) lab?.setAttribute('aria-busy', 'true');
     else lab?.removeAttribute('aria-busy');
     if (sub) sub.textContent = running ? 'RUNNING' : starting ? 'Starting…' : 'Stopped';
+    if (circle) {
+      circle.classList.remove('hidden');
+      circle.classList.toggle('is-running', running);
+    }
+    footerOrb?.classList.toggle('running-glow', running);
   } finally {
     botPowerSwitchSyncing = false;
   }
 }
 
+async function refreshSidebarBotPowerUi() {
+  try {
+    const st = await (await fetch('/api/bot/status')).json();
+    applyTelegramBotToggleUi(st);
+  } catch {
+    applyTelegramBotToggleUi(null);
+  }
+}
+
 async function loadOverview() {
+  const runAnimCards = ['overviewCardBotName', 'overviewCardServer', 'overviewCardTelegram']
+    .map((id) => $(id))
+    .filter(Boolean);
+  const setRunningAnim = (on) => {
+    for (const el of runAnimCards) {
+      el.classList.toggle('status-card-running', Boolean(on));
+    }
+  };
+
   try {
     const settings = await (await fetch('/api/settings')).json();
     const display = String(settings.botPersona?.displayName || '').trim();
@@ -783,11 +1184,13 @@ async function loadOverview() {
     } else {
       setStatusLed($('overviewTelegramLed'), 'idle');
     }
+    setRunningAnim(running);
     applyTelegramBotToggleUi(st);
   } catch {
     const line = $('overviewTelegramLine');
     if (line) line.textContent = '?';
     setStatusLed($('overviewTelegramLed'), 'unknown');
+    setRunningAnim(false);
     applyTelegramBotToggleUi(null);
   }
 
@@ -925,6 +1328,7 @@ function formatSoulDetailPaneHtml(soul) {
 
   const bpRows = [
     ['displayName', 'Bot display name'],
+    ['displayNameMy', 'Bot display name (Myanmar)'],
     ['gender', 'Bot gender'],
     ['style', 'Reply style'],
     ['role', 'Bot role'],
@@ -1040,7 +1444,7 @@ function applySoulToMemForm(soul) {
   const addrEn = String(prof.addressUserEn ?? legacyBp.addressUserEn ?? '').trim();
   const addrMy = String(prof.addressUserMy ?? legacyBp.addressUserMy ?? '').trim();
   $('memWhoAmI').value = prof.whoAmI || '';
-  $('memWork').value = prof.work || '';
+  if ($('memWork')) $('memWork').value = prof.work || '';
   if ($('memGender')) $('memGender').value = mapProfileGenderToSelect(prof.gender);
   if ($('memAge')) $('memAge').value = mapProfileAgeToSelect(prof.age);
   if ($('memAddressUserEn')) $('memAddressUserEn').value = addrEn;
@@ -1060,7 +1464,7 @@ function mergeBotPersonaForMemForm(soul) {
     soul.preferences?.botPersona && typeof soul.preferences.botPersona === 'object'
       ? soul.preferences.botPersona
       : {};
-  const keys = ['displayName', 'gender', 'style', 'role'];
+  const keys = ['displayName', 'displayNameMy', 'gender', 'style', 'role'];
   const out = { ...g };
   for (const k of keys) {
     const v = l[k];
@@ -1072,6 +1476,7 @@ function mergeBotPersonaForMemForm(soul) {
 function applyBotPersonaFieldsToForm(bp) {
   const p = bp || {};
   if ($('botDisplayName')) $('botDisplayName').value = p.displayName || '';
+  if ($('botDisplayNameMy')) $('botDisplayNameMy').value = p.displayNameMy || '';
   if ($('botGender')) {
     const g = String(p.gender || '').trim().toLowerCase();
     if (g === 'male' || g === 'm') $('botGender').value = 'Male';
@@ -1471,14 +1876,14 @@ $('inpBotPower')?.addEventListener('change', async () => {
   const wantRun = cb.checked;
   cb.disabled = true;
   lab?.setAttribute('aria-busy', 'true');
-  setStatus(wantRun ? 'Starting…' : 'Stopping…', '');
+  setStatus('', '');
   try {
     if (wantRun) {
       const r = await fetch('/api/bot/start', { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Start failed');
       logLine('Bot started.');
-      setStatus('Bot running.', 'ok');
+      setStatus('', '');
     } else {
       const r = await fetch('/api/bot/stop', { method: 'POST' });
       const j = await r.json();
@@ -1510,6 +1915,7 @@ if ($('btnSaveBotPersona')) {
     try {
       const botPersona = {
         displayName: $('botDisplayName').value.trim(),
+        displayNameMy: $('botDisplayNameMy') ? $('botDisplayNameMy').value.trim() : '',
         gender: $('botGender') ? $('botGender').value.trim() : '',
         style: $('botStyle').value.trim(),
         role: $('botRole').value.trim(),
@@ -1540,6 +1946,7 @@ if ($('btnSaveBotPersonaGlobal')) {
         llmModel: $('llmModel')?.value?.trim() || '',
         botPersona: {
           displayName: $('botDisplayName').value.trim(),
+          displayNameMy: $('botDisplayNameMy') ? $('botDisplayNameMy').value.trim() : '',
           gender: $('botGender') ? $('botGender').value.trim() : '',
           style: $('botStyle').value.trim(),
           role: $('botRole').value.trim(),
@@ -1643,7 +2050,7 @@ if ($('btnSaveMemSession')) {
         display_name: $('memDisplayName').value.trim() || null,
         profile: {
           whoAmI: $('memWhoAmI').value.trim(),
-          work: $('memWork').value.trim(),
+          work: $('memWork') ? $('memWork').value.trim() : '',
           gender: $('memGender') ? $('memGender').value.trim() : '',
           age: $('memAge') ? $('memAge').value.trim() : '',
           extra: $('memExtra').value.trim(),
@@ -1852,7 +2259,14 @@ window.addEventListener('hashchange', routeHash);
 
 (async function init() {
   try {
+    initNeuralBackgroundToggle();
+    initScrollbarArrowGlow();
+    initWindowControls();
+    initNeuralBackground();
+    initCustomCursor();
+    logLine('Console active. Non-routine updates and errors will appear here.');
     await loadSettingsIntoForm();
+    await refreshSidebarBotPowerUi();
     if (!location.hash) location.hash = '#overview';
     routeHash();
     setInterval(async () => {
@@ -1863,6 +2277,12 @@ window.addEventListener('hashchange', routeHash);
         /* ignore */
       }
     }, 5000);
+    setInterval(() => {
+      refreshSidebarBotPowerUi().catch(() => {});
+    }, 5000);
+    setInterval(() => {
+      refreshConsoleStatusLine().catch(() => {});
+    }, 12000);
     let _hwChartResizeT;
     window.addEventListener(
       'resize',

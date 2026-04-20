@@ -5,6 +5,7 @@ import {
   parseCalendarRequest,
   summarizeWebContent,
   baseSystemPrompt,
+  deterministicRuntimeIdentityReply,
 } from '../llm/ollama.js';
 import { decideIntent } from './intent.js';
 import { formatSoulForPrompt, getSoul, ensureSoul } from '../memory/soul.js';
@@ -15,6 +16,28 @@ import { getConfig } from '../config.js';
 
 const YES = /^(yes|y|confirm|ok|okay|👍)$/i;
 const NO = /^(no|n|cancel|stop|👎)$/i;
+
+/** English-focused; avoids calling the LLM for “what model are you?” so small models cannot hallucinate Gemini/GPT. */
+function isRuntimeLlmIdentityQuestion(text) {
+  const s = String(text || '').trim();
+  if (s.length > 220) return false;
+  const lower = s.toLowerCase();
+  if (/\b(fashion|role|data|os)\s+model\b/i.test(lower)) return false;
+  if (/\bscale\s+model\b/i.test(lower)) return false;
+
+  return (
+    /\bwhat\s+model\s+are\s+you\b/i.test(lower) ||
+    /\bwhich\s+model\s+are\s+you\b/i.test(lower) ||
+    /\bwhat\s+(ai\s+)?model\s+(are\s+you|do\s+you\s+use|is\s+this)\b/i.test(lower) ||
+    /\bwhich\s+(ai\s+)?model\s+(are\s+you|do\s+you\s+use|is\s+this)\b/i.test(lower) ||
+    /\b(what|which)\s+llm\s+(are\s+you|do\s+you\s+use|is\s+this)\b/i.test(lower) ||
+    /\bwhat\s+(ai|llm)\s+(are\s+you|is\s+this|do\s+you\s+use)\b/i.test(lower) ||
+    /\bwhich\s+(ai|llm)\s+(are\s+you|is\s+this|do\s+you\s+use)\b/i.test(lower) ||
+    /\b(what|which)\s+(ai|llm)\s+are\s+you\s+using\b/i.test(lower) ||
+    /\b(what|which)\s+(backend|provider|engine)\s+(are\s+you|is\s+this|do\s+you\s+use)\b/i.test(lower) ||
+    /\b(are\s+you)\s+(gpt|claude|gemini|chatgpt|openai)\b/i.test(lower)
+  );
+}
 
 function formatEvents(rows) {
   if (!rows.length) return 'No events found.';
@@ -124,6 +147,10 @@ export async function handleTextMessage(userId, text) {
       reply:
         'You have a pending confirmation. Reply Yes to proceed, or No to cancel that request first.',
     };
+  }
+
+  if (isRuntimeLlmIdentityQuestion(trimmed)) {
+    return { reply: deterministicRuntimeIdentityReply() };
   }
 
   let intent;
