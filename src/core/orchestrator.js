@@ -59,6 +59,24 @@ function buildMessages(userId, userText) {
   ];
 }
 
+async function runWebSearch(userId, query) {
+  if (!getConfig().webSearchEnabled) {
+    try {
+      const reply = await chat(buildMessages(userId, query), { timeoutMs: 120000 });
+      return { reply: reply || '(empty model response)' };
+    } catch (e) {
+      logger.error(`Chat error: ${e.message}`);
+      return { reply: `Model error: ${e.message}` };
+    }
+  }
+  const res = await searchAndSummarize(query);
+  if (!res.ok) {
+    return { reply: `Web search failed: ${res.error}` };
+  }
+  const summary = await summarizeWebContent(query, res.pageTexts);
+  return { reply: summary };
+}
+
 async function handleCalendar(userId, text) {
   const parsed = await parseCalendarRequest(text);
   const op = String(parsed.op || 'upcoming').toLowerCase();
@@ -109,21 +127,7 @@ export async function handleTextMessage(userId, text) {
         const q = pending.payload?.query || '';
         clearPending(userId);
         if (!q) return { reply: 'Nothing to search.' };
-        if (!getConfig().webSearchEnabled) {
-          try {
-            const reply = await chat(buildMessages(userId, q), { timeoutMs: 120000 });
-            return { reply: reply || '(empty model response)' };
-          } catch (e) {
-            logger.error(`Chat error: ${e.message}`);
-            return { reply: `Model error: ${e.message}` };
-          }
-        }
-        const res = await searchAndSummarize(q);
-        if (!res.ok) {
-          return { reply: `Web search failed: ${res.error}` };
-        }
-        const summary = await summarizeWebContent(q, res.pageTexts);
-        return { reply: summary };
+        return runWebSearch(userId, q);
       }
       if (pending.kind === 'add_event') {
         const { title, starts_at } = pending.payload || {};
@@ -163,14 +167,7 @@ export async function handleTextMessage(userId, text) {
 
   if (intent === 'SEARCH' && getConfig().webSearchEnabled) {
     const q = trimmed.replace(/^\s*(search|look\s*up|google)\s*[:\s]*/i, '').trim() || trimmed;
-    setPending(userId, 'web_search', { query: q });
-    return {
-      reply:
-        `I can search the web (DuckDuckGo), open up to ${getConfig().maxBrowsePages} pages, and summarize.\n\n` +
-        `Query: ${q}\n\n` +
-        `Reply Yes to run this or No to cancel.`,
-      wantConfirmKeyboard: true,
-    };
+    return runWebSearch(userId, q);
   }
 
   if (intent === 'CALENDAR') {
@@ -205,21 +202,7 @@ export async function handleConfirmCallback(userId, accepted) {
     const q = pending.payload?.query || '';
     clearPending(userId);
     if (!q) return { reply: 'Nothing to search.' };
-    if (!getConfig().webSearchEnabled) {
-      try {
-        const reply = await chat(buildMessages(userId, q), { timeoutMs: 120000 });
-        return { reply: reply || '(empty model response)' };
-      } catch (e) {
-        logger.error(`Chat error: ${e.message}`);
-        return { reply: `Model error: ${e.message}` };
-      }
-    }
-    const res = await searchAndSummarize(q);
-    if (!res.ok) {
-      return { reply: `Web search failed: ${res.error}` };
-    }
-    const summary = await summarizeWebContent(q, res.pageTexts);
-    return { reply: summary };
+    return runWebSearch(userId, q);
   }
   if (pending.kind === 'add_event') {
     const { title, starts_at } = pending.payload || {};

@@ -528,7 +528,9 @@ export function createGuiApp() {
   app.get('/api/stats/llm-usage', (req, res) => {
     try {
       getDb();
-      res.json(getLlmUsageStats());
+      const provider = String(req.query?.provider || '').trim().toLowerCase();
+      const providerFilter = provider || null;
+      res.json(getLlmUsageStats(providerFilter));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

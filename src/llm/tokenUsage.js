@@ -61,37 +61,43 @@ function dayKeysLastNDays(n) {
   return keys;
 }
 
-export function getLlmUsageStats() {
+export function getLlmUsageStats(provider = null) {
   const db = getDb();
+  const providerSql = provider ? ' WHERE provider = ?' : '';
+  const providerArgs = provider ? [String(provider)] : [];
   const totalRow = db
     .prepare(
       `SELECT 
         COALESCE(SUM(prompt_tokens), 0) as prompt_sum,
         COALESCE(SUM(completion_tokens), 0) as completion_sum,
         COUNT(*) as n
-       FROM llm_usage`
+       FROM llm_usage${providerSql}`
     )
-    .get();
+    .get(...providerArgs);
   const totalTokens = (totalRow.prompt_sum || 0) + (totalRow.completion_sum || 0);
   const todayKey = localDayKey();
   const todayRow = db
     .prepare(
       `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as t
-       FROM llm_usage WHERE day_key = ?`
+       FROM llm_usage WHERE day_key = ?${provider ? ' AND provider = ?' : ''}`
     )
-    .get(todayKey);
+    .get(todayKey, ...providerArgs);
   const todayTokens = todayRow?.t ?? 0;
 
-  const last = db.prepare(`SELECT * FROM llm_usage ORDER BY id DESC LIMIT 1`).get();
+  const last = db
+    .prepare(`SELECT * FROM llm_usage${providerSql} ORDER BY id DESC LIMIT 1`)
+    .get(...providerArgs);
   const lastTokensPerSec = last ? tokensPerSec(last) : null;
 
   const recent = db
     .prepare(
       `SELECT prompt_tokens, completion_tokens, duration_ms FROM llm_usage
-       WHERE duration_ms >= 50 AND (prompt_tokens + completion_tokens) > 0
+       WHERE duration_ms >= 50 AND (prompt_tokens + completion_tokens) > 0${
+         provider ? ' AND provider = ?' : ''
+       }
        ORDER BY id DESC LIMIT 80`
     )
-    .all();
+    .all(...providerArgs);
   const tpsVals = recent.map((r) => tokensPerSec(r)).filter((v) => v != null);
   const avgTokensPerSec = tpsVals.length ? tpsVals.reduce((a, b) => a + b, 0) / tpsVals.length : null;
 
@@ -100,9 +106,9 @@ export function getLlmUsageStats() {
     const r = db
       .prepare(
         `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as t
-         FROM llm_usage WHERE day_key = ?`
+         FROM llm_usage WHERE day_key = ?${provider ? ' AND provider = ?' : ''}`
       )
-      .get(day);
+      .get(day, ...providerArgs);
     const tokens = r?.t ?? 0;
     const short = day.slice(5);
     return { day, label: short, tokens };
@@ -115,6 +121,10 @@ export function getLlmUsageStats() {
     completionTotal: totalRow.completion_sum || 0,
     requestCount: totalRow.n || 0,
     lastTokensPerSec,
+    lastDurationMs: last?.duration_ms ?? null,
+    lastCompletionTokens: last?.completion_tokens ?? null,
+    lastProvider: last?.provider || '',
+    lastModel: last?.model || '',
     avgTokensPerSec,
     daily,
   };

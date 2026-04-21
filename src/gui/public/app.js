@@ -742,6 +742,18 @@ function formatLlmBackendLabel(provider) {
   return 'Ollama';
 }
 
+function isLocalLlmProvider(provider) {
+  const p = String(provider || '').toLowerCase();
+  return p === 'ollama' || p === 'llama-server';
+}
+
+function formatDurationMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n < 1000) return `${Math.round(n)} ms`;
+  return `${(n / 1000).toFixed(2)} s`;
+}
+
 function setGaugeRing(gaugeEl, midEl, pct, emptyLabel = '—') {
   if (!gaugeEl || !midEl) return;
   if (pct != null && Number.isFinite(pct)) {
@@ -1136,6 +1148,24 @@ async function refreshSidebarBotPowerUi() {
 }
 
 async function loadOverview() {
+  const generatedTokensCard = $('overviewCardGeneratedTokens');
+  const generationTimeCard = $('overviewCardGenerationTime');
+  const generationSpeedCard = $('overviewCardGenerationSpeed');
+  const generatedTokensEl = $('overviewGeneratedTokens');
+  const generationTimeEl = $('overviewGenerationTime');
+  const generationSpeedEl = $('overviewGenerationSpeed');
+  let currentProvider = '';
+  const clearLocalLlmStats = () => {
+    if (generatedTokensEl) generatedTokensEl.textContent = '—';
+    if (generationTimeEl) generationTimeEl.textContent = '—';
+    if (generationSpeedEl) generationSpeedEl.textContent = '—';
+  };
+  const setLocalLlmStatsVisible = (visible) => {
+    generatedTokensCard?.classList.toggle('hidden', !visible);
+    generationTimeCard?.classList.toggle('hidden', !visible);
+    generationSpeedCard?.classList.toggle('hidden', !visible);
+  };
+
   const runAnimCards = ['overviewCardBotName', 'overviewCardServer', 'overviewCardTelegram']
     .map((id) => $(id))
     .filter(Boolean);
@@ -1154,19 +1184,46 @@ async function loadOverview() {
     }
 
     const backEl = $('overviewLlmBackend');
-    if (backEl) backEl.textContent = formatLlmBackendLabel(settings.llmProvider);
+    currentProvider = String(settings.llmProvider || '').toLowerCase();
+    if (backEl) backEl.textContent = formatLlmBackendLabel(currentProvider);
     const modelEl = $('overviewActiveModel');
     if (modelEl) {
       const m = String(settings.llmModel || '').trim();
       modelEl.textContent = m || '—';
     }
   } catch {
+    currentProvider = '';
     const nameEl = $('overviewBotName');
     if (nameEl) nameEl.textContent = '—';
     const backEl = $('overviewLlmBackend');
     if (backEl) backEl.textContent = '—';
     const modelEl = $('overviewActiveModel');
     if (modelEl) modelEl.textContent = '—';
+  }
+
+  clearLocalLlmStats();
+  const showLocalLlmStats = isLocalLlmProvider(currentProvider);
+  setLocalLlmStatsVisible(showLocalLlmStats);
+  if (showLocalLlmStats) {
+    try {
+      const statsRes = await fetch(`/api/stats/llm-usage?provider=${encodeURIComponent(currentProvider)}`);
+      const stats = await statsRes.json();
+      if (statsRes.ok) {
+        if (generatedTokensEl) {
+          const generated = Number(stats.lastCompletionTokens);
+          generatedTokensEl.textContent = Number.isFinite(generated) ? generated.toLocaleString() : '—';
+        }
+        if (generationTimeEl) {
+          generationTimeEl.textContent = formatDurationMs(stats.lastDurationMs);
+        }
+        if (generationSpeedEl) {
+          const tps = Number(stats.lastTokensPerSec);
+          generationSpeedEl.textContent = Number.isFinite(tps) && tps > 0 ? `${tps.toFixed(2)} tok/s` : '—';
+        }
+      }
+    } catch {
+      /* ignore overview local metric fetch errors */
+    }
   }
 
   try {
