@@ -6,6 +6,10 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
+    "postinstall": "node scripts/rebuild-native.js",
+    "prestart": "node scripts/rebuild-native.js --runtime=node",
+    "pregui": "node scripts/rebuild-native.js --runtime=electron",
+    "pregui:web": "node scripts/rebuild-native.js --runtime=node",
     "start": "node src/index.js",
     "gui": "electron src/electron-main.js",
     "gui:web": "node src/gui-main.js",
@@ -24,6 +28,7 @@
     "winston": "^3.15.0"
   },
   "devDependencies": {
-    "electron": "^41.2.1"
+    "electron": "^41.2.1",
+    "electron-rebuild": "^3.2.9"
   }
 }
