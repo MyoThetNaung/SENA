@@ -4,6 +4,27 @@ import { logger } from '../logger.js';
 
 let browserPromise = null;
 
+/**
+ * DuckDuckGo result link selectors — ordered by specificity.
+ * When DDG changes their HTML, adding a new fallback only requires
+ * appending to this array instead of editing page.evaluate() code.
+ */
+const DDG_RESULT_SELECTORS = [
+  'a.result__a',
+  'a.result__url',
+  '.result__title a',
+  '.result a.result__a',
+  'a[href*="duckduckgo.com/l/?uddg="]',
+  'a[href*="/l/?uddg="]',
+  'a[href*="uddg="]',
+];
+
+/**
+ * Wait-for selector list — a single CSS selector string used by
+ * `page.waitForSelector()`.  We join with `,` so any match satisfies.
+ */
+const DDG_WAIT_SELECTOR = DDG_RESULT_SELECTORS.join(', ');
+
 /** Reduces empty SERPs from services that throttle default headless Chrome. */
 const CHROME_WIN_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -218,14 +239,14 @@ export async function searchAndSummarize(query) {
       );
 
       await searchPage
-        .waitForSelector('a.result__a, a.result__url, .result__title a, a[href*="uddg="]', {
+        .waitForSelector(DDG_WAIT_SELECTOR, {
           timeout: Math.min(12000, remaining()),
         })
         .catch(() => {
           logger.warn('DuckDuckGo (headless): no result links within timeout.');
         });
 
-      hrefs = await searchPage.evaluate(() => {
+      hrefs = await searchPage.evaluate((selectors) => {
         function resolve(href) {
           if (!href) return null;
           try {
@@ -255,15 +276,6 @@ export async function searchAndSummarize(query) {
             out.push(r);
           }
         };
-        const selectors = [
-          'a.result__a',
-          'a.result__url',
-          '.result__title a',
-          '.result a.result__a',
-          'a[href*="duckduckgo.com/l/?uddg="]',
-          'a[href*="/l/?uddg="]',
-          'a[href*="uddg="]',
-        ];
         for (const sel of selectors) {
           for (const a of Array.from(document.querySelectorAll(sel))) {
             add(a.getAttribute('href'));
@@ -272,7 +284,7 @@ export async function searchAndSummarize(query) {
           if (out.length >= 8) break;
         }
         return out.slice(0, 5);
-      });
+      }, DDG_RESULT_SELECTORS);
 
       if (!hrefs.length) {
         const hint = await searchPage.evaluate(() => {

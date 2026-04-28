@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "SENA (Smart Engine for Notes & Action) AI Assistant — Telegram, Ollama/llama-server, SQLite, Puppeteer",
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/electron-main.js",
   "scripts": {
     "postinstall": "node scripts/rebuild-native.js",
     "prestart": "node scripts/rebuild-native.js --runtime=node",
@@ -12,9 +12,17 @@
     "pregui:web": "node scripts/rebuild-native.js --runtime=node",
     "start": "node src/index.js",
     "gui": "electron src/electron-main.js",
+    "pack:win": "node scripts/make-icon.js && npm run pregui && electron-builder --win portable",
+    "pack:mac": "npm run pregui && electron-builder --mac dmg --config.directories.output=mac",
     "gui:web": "node src/gui-main.js",
     "dev": "node --watch src/index.js",
-    "build": "node --check src/index.js && node --check src/gui-main.js && node --check src/electron-main.js && node --check src/electron-preload.js"
+    "build": "node --check src/index.js && node --check src/gui-main.js && node --check src/electron-main.js && node --check src/electron-preload.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src scripts",
+    "lint:fix": "eslint src scripts --fix",
+    "format": "prettier --write \"src/**/*.js\" \"scripts/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"scripts/**/*.js\""
   },
   "engines": {
     "node": ">=18"
@@ -28,7 +36,52 @@
     "winston": "^3.15.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "electron": "^41.2.1",
-    "electron-rebuild": "^3.2.9"
+    "electron-builder": "^26.8.1",
+    "electron-rebuild": "^3.2.9",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "png-to-ico": "^2.1.8",
+    "prettier": "^3.4.0",
+    "sharp": "^0.34.5",
+    "vitest": "^3.0.0"
+  },
+  "build": {
+    "appId": "com.sena.assistant",
+    "productName": "SENA",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "npmRebuild": false,
+    "files": [
+      "src/**/*",
+      "scripts/**/*",
+      ".env.example",
+      "package.json",
+      "!**/.idea/**",
+      "!tests/**",
+      "!models/**",
+      "!engine/**"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "mac": {
+      "icon": "build/icon-256.png",
+      "target": [
+        "dmg"
+      ]
+    }
   }
 }

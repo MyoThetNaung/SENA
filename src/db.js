@@ -35,6 +35,7 @@ export function getDb() {
   const db = new Database(databasePath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.pragma('busy_timeout = 5000');
   migrate(db);
   dbInstance = db;
   lastDbPath = databasePath;

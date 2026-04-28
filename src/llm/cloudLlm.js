@@ -19,6 +19,70 @@ function isOpenAiChatCapableModelId(id) {
   return true;
 }
 
+/**
+ * Parse OpenAI-compatible SSE chunks (used by both OpenAI cloud and llama-server streaming).
+ * Each chunk is `data: {...}\n\n`; final chunk is `data: [DONE]\n\n`.
+ */
+export async function* openAiStreamChunks(response) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('No response body for stream');
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith('data:')) continue;
+      const payload = s.slice(5).trim();
+      if (payload === '[DONE]') return;
+      let j;
+      try {
+        j = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      yield j;
+    }
+  }
+}
+
+/**
+ * Streaming chat completion via OpenAI-compatible SSE (works for OpenAI cloud, llama-server, and any
+ * provider that follows the OpenAI chat completions streaming format).
+ * @param {string} url
+ * @param {{ model: string, messages: object[], stream: true, temperature?: number, stop?: string[] }} body
+ * @param {{ headers: object, timeoutMs?: number }} opts
+ * @yields {string} text deltas as they arrive
+ */
+export async function* openAiCompatibleChatStream(url, body, opts) {
+  const timeoutMs = opts.timeoutMs ?? 120000;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      body: JSON.stringify({ ...body, stream: true }),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Stream HTTP ${res.status}: ${errText.slice(0, 300)}`);
+  }
+  for await (const chunk of openAiStreamChunks(res)) {
+    const delta = chunk?.choices?.[0]?.delta?.content;
+    if (typeof delta === 'string' && delta) yield delta;
+  }
+}
+
 /** @returns {{ ok: boolean, models: string[], error?: string }} */
 export async function fetchOpenAiModelNames(apiKey) {
   const key = String(apiKey || '').trim();
@@ -177,6 +241,30 @@ export async function openaiChatWithUsage(messages, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Streaming chat completion via OpenAI cloud (SSE).
+ * @param {{ role: string, content: string }[]} messages
+ * @param {{ model?: string, timeoutMs?: number, temperature?: number, stop?: string[] }} options
+ * @yields {string} text deltas
+ */
+export async function* openaiChatStream(messages, options = {}) {
+  const c = getConfig();
+  const key = String(c.openaiApiKey || '').trim();
+  if (!key) throw new Error('OpenAI API key is missing.');
+  const model = String(options.model || c.llmModel || '').trim();
+  if (!model) throw new Error('No OpenAI model selected.');
+  const body = { model, messages: messages.map((m) => ({
+    role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
+    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+  })) };
+  if (options.temperature !== undefined) body.temperature = options.temperature;
+  if (options.stop) body.stop = options.stop;
+  yield* openAiCompatibleChatStream(OPENAI_CHAT_URL, body, {
+    headers: { Authorization: `Bearer ${key}` },
+    timeoutMs: options.timeoutMs,
+  });
 }
 
 /**

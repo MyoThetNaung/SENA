@@ -63,7 +63,8 @@ function setStatus(msg, kind) {
 function logLine(line) {
   const el = $('log');
   const t = new Date().toLocaleTimeString();
-  el.textContent = `[${t}] ${line}\n` + el.textContent;
+  if (!el) return;
+  el.textContent = `[${t}] ${line}`;
 }
 
 function initWindowControls() {
@@ -75,6 +76,8 @@ function initWindowControls() {
 }
 
 let lastConsoleStatusSignature = '';
+let lastGuiConsoleUserId = 900000001;
+const OVERVIEW_CHAT_LIMIT = '50';
 
 async function refreshConsoleStatusLine() {
   try {
@@ -689,6 +692,7 @@ function showTab(name) {
   }
   if (name === 'overview') {
     loadOverview();
+    loadChat().catch(() => {});
     startOverviewHardwarePolling();
     startOverviewClock();
   } else {
@@ -1625,24 +1629,52 @@ function getGuiConsoleUserIdFromData(data) {
   return data?.guiConsoleUserId != null ? Number(data.guiConsoleUserId) : 900000001;
 }
 
+function getActiveChatSelect() {
+  return $('chatSessionSelect');
+}
+
+function getActiveChatInputEl() {
+  const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
+  if (overviewActive && $('overviewChatInput')) return $('overviewChatInput');
+  return $('chatInput') || $('overviewChatInput');
+}
+
+function syncChatLimitSelects(value) {
+  for (const id of ['chatLimit']) {
+    const el = $(id);
+    if (el && [...el.options].some((x) => x.value === value)) el.value = value;
+  }
+}
+
+function updateChatSessionHint(selectEl) {
+  if (!selectEl) return;
+  const uid = Number(selectEl.value);
+  const opt = selectEl.selectedOptions[0];
+  const text = `Active user id: ${uid} — ${opt ? opt.textContent : ''}`;
+  const hintIds = ['chatSessionHint'];
+  for (const id of hintIds) {
+    const hintEl = $(id);
+    if (hintEl) hintEl.textContent = text;
+  }
+}
+
 function buildSessionSelect(sessionsPayload) {
   const guiId = getGuiConsoleUserIdFromData(sessionsPayload);
+  lastGuiConsoleUserId = guiId;
   const sessions = sessionsPayload?.sessions || [];
   const sel = $('chatSessionSelect');
   if (!sel) return guiId;
-  const prev = sel.value;
+  const prev = getActiveChatSelect()?.value || '';
   sel.innerHTML = '';
   const oGui = document.createElement('option');
   oGui.value = String(guiId);
   oGui.textContent = 'Control panel (local test)';
   sel.appendChild(oGui);
-  const seen = new Set([guiId]);
   for (const s of sessions) {
     const o = document.createElement('option');
     o.value = String(s.userId);
     o.textContent = `${s.label} · ${s.userId}`;
     sel.appendChild(o);
-    seen.add(s.userId);
   }
   const saved = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
   const pick =
@@ -1650,18 +1682,12 @@ function buildSessionSelect(sessionsPayload) {
     (prev && [...sel.options].some((x) => x.value === prev) && prev) ||
     String(guiId);
   sel.value = pick;
-  const hint = $('chatSessionHint');
-  if (hint) {
-    const uid = Number(sel.value);
-    const opt = sel.selectedOptions[0];
-    hint.textContent = `Active user id: ${uid} — ${opt ? opt.textContent : ''}`;
-  }
+  updateChatSessionHint(sel);
   return guiId;
 }
 
-function renderChatThread(messages, scrollOpts = {}) {
+function renderChatThreadInto(thread, messages, scrollOpts = {}) {
   const { forceBottom = false } = scrollOpts;
-  const thread = $('chatThread');
   if (!thread) return;
   const list = messages || [];
   if (!list.length) {
@@ -1698,12 +1724,19 @@ function renderChatThread(messages, scrollOpts = {}) {
   }
 }
 
+function renderChatThread(messages, scrollOpts = {}) {
+  renderChatThreadInto($('chatThread'), messages, scrollOpts);
+  renderChatThreadInto($('overviewChatThread'), messages, scrollOpts);
+}
+
 async function loadChat(opts = {}) {
-  const limit = $('chatLimit')?.value || '100';
+  const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
+  const limit = overviewActive ? OVERVIEW_CHAT_LIMIT : $('chatLimit')?.value || '100';
+  if (!overviewActive) syncChatLimitSelects(limit);
   const sess = await fetch('/api/chat/sessions').then((r) => r.json());
   if (sess.error) throw new Error(sess.error);
   buildSessionSelect(sess);
-  const activeUid = Number($('chatSessionSelect')?.value);
+  const activeUid = overviewActive ? lastGuiConsoleUserId : Number(getActiveChatSelect()?.value);
   const sessionChanged = lastChatLoadedUserId !== activeUid;
   const forceBottom = Boolean(opts.forceBottom) || sessionChanged;
   localStorage.setItem(CHAT_SESSION_STORAGE_KEY, String(activeUid));
@@ -1716,13 +1749,13 @@ async function loadChat(opts = {}) {
 }
 
 async function sendChatFromGui() {
-  const input = $('chatInput');
+  const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
+  const input = getActiveChatInputEl();
   const text = (input?.value || '').trim();
   if (!text) return;
-  const sel = $('chatSessionSelect');
-  const userId = Number(sel?.value);
+  const userId = overviewActive ? lastGuiConsoleUserId : Number(getActiveChatSelect()?.value);
   if (!Number.isFinite(userId)) {
-    setStatus('Pick a session first.', 'err');
+    setStatus('Chat session is unavailable.', 'err');
     return;
   }
   setStatus('Sending…', '');
@@ -1958,7 +1991,6 @@ $('inpBotPower')?.addEventListener('change', async () => {
   }
 });
 
-$('btnRefreshChat').addEventListener('click', () => loadChat().catch(() => {}));
 $('btnRefreshSouls').addEventListener('click', () => loadDataTab().catch((e) => setStatus(e.message, 'err')));
 
 if ($('btnSaveBotPersona')) {
@@ -2270,23 +2302,34 @@ $('panel-pending')?.addEventListener('click', async (ev) => {
   }
 });
 $('btnRefreshAccess').addEventListener('click', () => loadAccess().catch((e) => setStatus(e.message, 'err')));
-$('chatLimit').addEventListener('change', () => loadChat({ forceBottom: true }).catch(() => {}));
-if ($('chatSessionSelect')) {
-  $('chatSessionSelect').addEventListener('change', () => {
-    localStorage.setItem(CHAT_SESSION_STORAGE_KEY, $('chatSessionSelect').value);
+for (const id of ['chatLimit']) {
+  $(id)?.addEventListener('change', (ev) => {
+    const val = String(ev.target?.value || '100');
+    syncChatLimitSelects(val);
+    loadChat({ forceBottom: true }).catch(() => {});
+  });
+}
+for (const id of ['chatSessionSelect']) {
+  $(id)?.addEventListener('change', (ev) => {
+    const val = String(ev.target?.value || '');
+    localStorage.setItem(CHAT_SESSION_STORAGE_KEY, val);
+    updateChatSessionHint(getActiveChatSelect());
     loadChat().catch((e) => setStatus(e.message, 'err'));
   });
 }
-if ($('btnChatSend')) {
-  $('btnChatSend').addEventListener('click', () => sendChatFromGui().catch(() => {}));
+for (const id of ['btnChatSend', 'btnOverviewChatSend']) {
+  $(id)?.addEventListener('click', () => sendChatFromGui().catch(() => {}));
 }
-if ($('chatInput')) {
-  $('chatInput').addEventListener('keydown', (ev) => {
+for (const id of ['chatInput', 'overviewChatInput']) {
+  $(id)?.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey) {
       ev.preventDefault();
       sendChatFromGui().catch(() => {});
     }
   });
+}
+for (const id of ['btnRefreshChat']) {
+  $(id)?.addEventListener('click', () => loadChat().catch((e) => setStatus(e.message, 'err')));
 }
 function routeHash() {
   let h = (location.hash || '#overview').slice(1) || 'overview';
@@ -2354,7 +2397,10 @@ window.addEventListener('hashchange', routeHash);
       { passive: true }
     );
     setInterval(() => {
-      if (document.getElementById('panel-chat')?.classList.contains('active')) {
+      if (
+        document.getElementById('panel-chat')?.classList.contains('active') ||
+        document.getElementById('panel-overview')?.classList.contains('active')
+      ) {
         loadChat().catch(() => {});
       }
       if (document.getElementById('panel-access')?.classList.contains('active')) {

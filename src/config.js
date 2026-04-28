@@ -1,12 +1,25 @@
 import 'dotenv/config';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(__dirname, '..');
 
-const SETTINGS_PATH = path.join(projectRoot, 'data', 'settings.json');
+function getRuntimeRoot() {
+  const isElectron = Boolean(process.versions?.electron);
+  if (!isElectron) return projectRoot;
+
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    return process.env.PORTABLE_EXECUTABLE_DIR;
+  }
+
+  return path.join(process.env.APPDATA || os.homedir(), 'SENA');
+}
+
+const runtimeRoot = getRuntimeRoot();
+const SETTINGS_PATH = path.join(runtimeRoot, 'data', 'settings.json');
 
 function webSearchFromSettings(settings) {
   const ws = settings.webSearchEnabled;
@@ -42,12 +55,12 @@ function parseUserIds(raw) {
     });
 }
 
-const defaultDb = path.join(projectRoot, 'data', 'assistant.db');
+const defaultDb = path.join(runtimeRoot, 'data', 'assistant.db');
 
 function resolveUserPath(p, defaultRelative) {
   const raw = (p != null && String(p).trim() !== '' ? String(p).trim() : defaultRelative) || defaultRelative;
   if (path.isAbsolute(raw)) return raw;
-  return path.join(projectRoot, raw);
+  return path.join(runtimeRoot, raw);
 }
 
 function buildConfig() {

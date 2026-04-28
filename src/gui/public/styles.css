@@ -1534,7 +1534,7 @@ button.wide {
   flex-direction: row !important;
   align-items: center;
   justify-content: flex-end;
-  gap: 0;
+  gap: 0.45rem;
   transform: scale(0.9);
   transform-origin: right center;
   flex-shrink: 0;
@@ -1546,6 +1546,9 @@ button.wide {
   display: none;
 }
 .neural-bg-toggle-wrap::before {
+  content: none;
+}
+.neural-bg-toggle-wrap::after {
   content: none;
 }
 .lead {
@@ -2459,6 +2462,11 @@ code {
   letter-spacing: 0.02em;
 }
 
+#overviewCardTelegram {
+  display: flex;
+  flex-direction: column;
+}
+
 .status-card-sub {
   margin-top: 0.35rem;
   font-size: 0.78rem;
@@ -2804,6 +2812,22 @@ button:disabled {
   max-width: 100%;
   min-width: 0;
 }
+#panel-chat .chat-console {
+  min-height: calc(100dvh - 165px);
+}
+.chat-console--overview {
+  margin-top: 1rem;
+}
+.chat-console--overview .chat-messenger {
+  min-height: 260px;
+}
+.chat-console--overview .chat-messenger .chat-thread.chat-messenger-thread {
+  min-height: 160px;
+  max-height: 190px;
+}
+.chat-console--overview .chat-messenger-compose {
+  padding: 0.5rem 0.65rem 0.65rem;
+}
 .chat-toolbar {
   flex-wrap: wrap;
   align-items: center;
@@ -2854,6 +2878,10 @@ button:disabled {
   border: 1px solid rgba(36, 48, 68, 0.75);
   box-sizing: border-box;
 }
+#panel-chat .chat-messenger {
+  min-height: 0;
+  height: max(340px, calc(100dvh - 250px));
+}
 .chat-messenger .chat-thread.chat-messenger-thread {
   flex: 1 1 auto;
   min-height: min(200px, 34vh);
@@ -2864,6 +2892,10 @@ button:disabled {
   background: rgba(10, 13, 17, 0.42);
   backdrop-filter: blur(var(--glass-blur-tight));
   -webkit-backdrop-filter: blur(var(--glass-blur-tight));
+}
+#panel-chat .chat-messenger .chat-thread.chat-messenger-thread {
+  min-height: 0;
+  max-height: none;
 }
 .chat-messenger-compose {
   flex-shrink: 0;
@@ -3123,6 +3155,30 @@ button:disabled {
     0 8px 22px rgba(0, 0, 0, 0.45);
 }
 
+.log.log--mini {
+  margin-top: auto;
+  min-height: auto;
+  max-height: none;
+  height: 3.2rem;
+  padding: 1.7rem 0.8rem 0.6rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.73rem;
+  line-height: 1.25;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.log.log--mini::before {
+  content: 'terminal';
+}
+
+.log.log--mini::after {
+  content: none;
+}
+
 .log::before {
   content: 'SENA TERMINAL';
   position: absolute;
@@ -3230,3 +3286,4 @@ button:disabled {
     padding-top: 0.5rem;
   }
 }
+

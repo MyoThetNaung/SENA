@@ -82,6 +82,7 @@ function listGgufInFolder(dir) {
   return { folder: dir, files };
 }
 
+
 function readSettingsForApi() {
   reloadConfig();
   syncLoggerLevel();
@@ -766,9 +767,15 @@ export function createGuiApp() {
 
 export async function startGuiServer(port) {
   const app = createGuiApp();
+  const host = String(process.env.GUI_HOST || '0.0.0.0').trim() || '0.0.0.0';
+  const bindHost = host.toLowerCase() === 'localhost' ? '127.0.0.1' : host;
+  const logHost = bindHost === '0.0.0.0' ? '127.0.0.1' : bindHost;
   return new Promise((resolve, reject) => {
-    const server = app.listen(port, '127.0.0.1', () => {
-      logger.info(`Control Panel: http://127.0.0.1:${port}  (local only)`);
+    const server = app.listen(port, bindHost, () => {
+      logger.info(`Control Panel: http://${logHost}:${port}`);
+      if (bindHost === '0.0.0.0') {
+        logger.info(`LAN access enabled on port ${port} (use your PC IP from other devices).`);
+      }
       resolve(server);
     });
     server.on('error', reject);

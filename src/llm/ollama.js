@@ -6,7 +6,7 @@ import { startLlamaServerIfConfigured } from './llamaProcess.js';
 import { recordLlmUsage } from './tokenUsage.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import { sanitizeChatCompletionText, CHAT_TEMPLATE_STOP_SEQUENCES } from './sanitizeCompletion.js';
-import { openaiChatWithUsage, geminiChatWithUsage } from './cloudLlm.js';
+import { openaiChatWithUsage, openaiChatStream, geminiChatWithUsage, openAiCompatibleChatStream } from './cloudLlm.js';
 
 export { sanitizeChatCompletionText };
 
@@ -108,10 +108,32 @@ function activeModel(options) {
   return options.model || getConfig().llmModel;
 }
 
-/** ~4 chars/token (rough); used only when llama-server omits `usage` in JSON. */
-function roughTokenEstimate(text) {
+/**
+ * Smarter token estimate when providers omit usage data.
+ * English/mixed text ~4 chars/token; CJK scripts ~1.5 chars/token;
+ * code ~3 chars/token; whitespace-heavy content is discounted.
+ */
+function estimateTokens(text) {
   if (!text || typeof text !== 'string') return 0;
-  return Math.max(0, Math.ceil(text.length / 4));
+  let tokens = 0;
+  let i = 0;
+  while (i < text.length) {
+    const cp = text.codePointAt(i);
+    if (cp >= 0x4e00 && cp <= 0x9fff) {
+      tokens += 1;
+      i += cp > 0xffff ? 2 : 1;
+    } else if (cp >= 0x3040 && cp <= 0x30ff) {
+      tokens += 1;
+      i += cp > 0xffff ? 2 : 1;
+    } else if (cp >= 0xac00 && cp <= 0xd7af) {
+      tokens += 1;
+      i += cp > 0xffff ? 2 : 1;
+    } else {
+      tokens += 0.25;
+      i += 1;
+    }
+  }
+  return Math.max(0, Math.ceil(tokens));
 }
 
 function sumPromptTokensFromMessages(messages) {
@@ -119,10 +141,10 @@ function sumPromptTokensFromMessages(messages) {
   let n = 0;
   for (const m of messages) {
     const c = m?.content;
-    if (typeof c === 'string') n += roughTokenEstimate(c);
+    if (typeof c === 'string') n += estimateTokens(c);
     else if (Array.isArray(c)) {
       for (const part of c) {
-        if (part && typeof part.text === 'string') n += roughTokenEstimate(part.text);
+        if (part && typeof part.text === 'string') n += estimateTokens(part.text);
       }
     }
   }
@@ -142,13 +164,13 @@ function extractOpenAiStyleUsage(data, messages, rawAssistantContent) {
   if (!Number.isFinite(completionTokens)) completionTokens = 0;
 
   if (promptTokens + completionTokens < 1 && Number.isFinite(totalTokens) && totalTokens > 0) {
-    const compEst = Math.max(1, roughTokenEstimate(typeof rawAssistantContent === 'string' ? rawAssistantContent : ''));
+    const compEst = Math.max(1, estimateTokens(typeof rawAssistantContent === 'string' ? rawAssistantContent : ''));
     completionTokens = Math.min(compEst, totalTokens);
     promptTokens = totalTokens - completionTokens;
   }
   if (promptTokens + completionTokens < 1) {
     promptTokens = sumPromptTokensFromMessages(messages);
-    completionTokens = roughTokenEstimate(typeof rawAssistantContent === 'string' ? rawAssistantContent : '');
+    completionTokens = estimateTokens(typeof rawAssistantContent === 'string' ? rawAssistantContent : '');
     if (promptTokens + completionTokens < 1 && String(rawAssistantContent || '').length > 0) {
       completionTokens = 1;
     }
@@ -332,16 +354,32 @@ export async function chat(messages, options = {}) {
 }
 
 /**
- * Streaming chat — Ollama only (llama-server stream format differs).
+ * Streaming chat — yields text deltas as they arrive.
+ * Supports Ollama, llama-server (OpenAI-compatible SSE), and OpenAI cloud.
  */
 export async function* chatStream(messages, options = {}) {
-  const p = getConfig().llmProvider;
-  if (p === 'llama-server' || p === 'openai' || p === 'gemini') {
-    throw new Error('Streaming is only implemented for Ollama; use non-stream chat for other backends.');
-  }
+  const config = getConfig();
+  const provider = config.llmProvider;
   const model = activeModel(options);
   const timeoutMs = options.timeoutMs ?? 120000;
-  const url = `${getConfig().ollamaBaseUrl}/api/chat`;
+  const stop = Array.isArray(options.stop) && options.stop.length ? options.stop : CHAT_TEMPLATE_STOP_SEQUENCES;
+
+  if (provider === 'llama-server') {
+    yield* llamaServerChatStream(messages, { ...options, model, timeoutMs, stop });
+    return;
+  }
+
+  if (provider === 'openai') {
+    yield* openaiChatStream(messages, { ...options, model, timeoutMs, stop });
+    return;
+  }
+
+  if (provider === 'gemini') {
+    yield* geminiChatStream(messages, { ...options, model, timeoutMs });
+    return;
+  }
+
+  const url = `${config.ollamaBaseUrl}/api/chat`;
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let res;
@@ -383,6 +421,110 @@ export async function* chatStream(messages, options = {}) {
     }
   }
 }
+
+async function* llamaServerChatStream(messages, options = {}) {
+  const base = getConfig().llamaServerUrl.replace(/\/$/, '');
+  const url = `${base}/v1/chat/completions`;
+  const body = {
+    model: options.model || getConfig().llmModel,
+    messages,
+    stream: true,
+    stop: options.stop || CHAT_TEMPLATE_STOP_SEQUENCES,
+  };
+  if (options.temperature !== undefined) body.temperature = options.temperature;
+  yield* openAiCompatibleChatStream(url, body, {
+    headers: {},
+    timeoutMs: options.timeoutMs ?? 120000,
+  });
+}
+
+/** Build Gemini streamGenerateContent URL and stream chunks. */
+async function* geminiChatStream(messages, options = {}) {
+  const c = getConfig();
+  const key = String(c.geminiApiKey || '').trim();
+  if (!key) throw new Error('Gemini API key is missing.');
+  let modelId = String(options.model || c.llmModel || '').trim().replace(/^models\//, '');
+  if (!modelId) throw new Error('No Gemini model selected.');
+  const { systemInstruction, contents } = buildGeminiStreamContents(messages);
+  const streamUrl = `${GEMINI_BASE}/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
+  const body = { contents };
+  if (systemInstruction) body.systemInstruction = systemInstruction;
+  if (options.temperature !== undefined) {
+    body.generationConfig = { temperature: options.temperature };
+  }
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(streamUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+  } finally {
+    clearTimeout(t);
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Gemini stream HTTP ${res.status}: ${errText.slice(0, 300)}`);
+  }
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error('No response body for Gemini stream');
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith('data:')) continue;
+      const payload = s.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let j;
+      try {
+        j = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      const parts = j?.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        for (const p of parts) {
+          if (typeof p.text === 'string' && p.text) yield p.text;
+        }
+      }
+    }
+  }
+}
+
+function buildGeminiStreamContents(messages) {
+  const systemTexts = [];
+  const contents = [];
+  for (const m of messages) {
+    const text = typeof m.content === 'string' ? m.content : '';
+    if (m.role === 'system') {
+      systemTexts.push(text);
+      continue;
+    }
+    const role = m.role === 'assistant' ? 'model' : 'user';
+    contents.push({ role, parts: [{ text }] });
+  }
+  const systemInstruction =
+    systemTexts.length > 0 ? { parts: [{ text: systemTexts.join('\n\n') }] } : undefined;
+  if (!contents.length) {
+    contents.push({ role: 'user', parts: [{ text: '(empty)' }] });
+  }
+  if (contents[0].role !== 'user') {
+    contents.unshift({ role: 'user', parts: [{ text: '…' }] });
+  }
+  return { systemInstruction, contents };
+}
+
+const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 export async function classifyIntent(userMessage) {
   const { webSearchEnabled } = getConfig();

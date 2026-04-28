@@ -14,6 +14,14 @@ app.setName('SENA');
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+process.on('uncaughtException', (error) => {
+  logger.error(`Uncaught exception: ${error?.stack || error?.message || error}`);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error(`Unhandled rejection: ${reason?.stack || reason?.message || reason}`);
+});
+
 async function shutdown(reason = 'exit') {
   logger.info(`Shutting down (${reason})`);
   await stopBotFromGui().catch(() => {});
@@ -103,6 +111,14 @@ app.whenReady().then(async () => {
   // Remove native app menu globally.
   Menu.setApplicationMenu(null);
   await boot();
+});
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  logger.error(`Renderer process gone: ${details.reason}`);
+});
+
+app.on('child-process-gone', (_event, details) => {
+  logger.error(`Child process gone: ${details.type} ${details.reason}`);
 });
 
 app.on('activate', () => {
