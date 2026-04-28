@@ -78,7 +78,7 @@
       "signAndEditExecutable": false
     },
     "mac": {
-      "icon": "build/icon-256.png",
+      "icon": "build/SENA LOGO 512x512.png",
       "target": [
         "dmg"
       ]
