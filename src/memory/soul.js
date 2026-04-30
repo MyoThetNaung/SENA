@@ -1,5 +1,6 @@
 import { getDb } from '../db.js';
 import { logger } from '../logger.js';
+import { SCOPED_USER_ID_OFFSET } from '../access/telegramAccess.js';
 
 function safeJsonParse(s, fallback) {
   try {
@@ -28,11 +29,25 @@ export function getSoul(userId) {
   };
 }
 
-export function listSouls() {
+export function listSouls(filter = {}) {
+  const botId = filter?.botId != null && filter.botId !== '' ? Number(filter.botId) : null;
   const db = getDb();
-  const rows = db
-    .prepare(`SELECT user_id, display_name, preferences, facts, updated_at FROM soul ORDER BY user_id`)
-    .all();
+  let rows = [];
+  if (Number.isFinite(botId)) {
+    rows = db
+      .prepare(
+        `SELECT s.user_id, s.display_name, s.preferences, s.facts, s.updated_at
+         FROM soul s
+         JOIN telegram_identity_map m ON m.id = (s.user_id - ?)
+         WHERE m.bot_id = ?
+         ORDER BY s.user_id`
+      )
+      .all(SCOPED_USER_ID_OFFSET, botId);
+  } else {
+    rows = db
+      .prepare(`SELECT user_id, display_name, preferences, facts, updated_at FROM soul ORDER BY user_id`)
+      .all();
+  }
   return rows.map((row) => ({
     user_id: row.user_id,
     display_name: row.display_name,

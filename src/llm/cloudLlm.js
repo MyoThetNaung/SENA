@@ -6,6 +6,7 @@ import { sanitizeChatCompletionText } from './sanitizeCompletion.js';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+const OPENROUTER_DEFAULT_BASE = 'https://openrouter.ai/api/v1';
 
 function isOpenAiChatCapableModelId(id) {
   const x = String(id || '').toLowerCase();
@@ -118,6 +119,42 @@ export async function fetchOpenAiModelNames(apiKey) {
 }
 
 /** @returns {{ ok: boolean, models: string[], error?: string }} */
+export async function fetchOpenRouterModelNames(apiKey, baseUrl) {
+  const key = String(apiKey || '').trim();
+  if (!key) return { ok: false, models: [], error: 'No API key' };
+  const base = String(baseUrl || OPENROUTER_DEFAULT_BASE).replace(/\/$/, '');
+  const url = `${base}/models`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${key}` },
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return { ok: false, models: [], error: `OpenRouter HTTP ${res.status}: ${text.slice(0, 200)}` };
+    }
+    let j;
+    try {
+      j = JSON.parse(text);
+    } catch {
+      return { ok: false, models: [], error: 'OpenRouter: invalid JSON from /models' };
+    }
+    const arr = Array.isArray(j?.data) ? j.data : [];
+    const models = [...new Set(arr.map((x) => x?.id).filter(isOpenAiChatCapableModelId))].sort();
+    return { ok: true, models };
+  } catch (e) {
+    const detail = explainFetchError(e, url, 'OpenRouter');
+    logger.debug(detail);
+    return { ok: false, models: [], error: detail };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/** @returns {{ ok: boolean, models: string[], error?: string }} */
 export async function fetchGeminiModelNames(apiKey) {
   const key = String(apiKey || '').trim();
   if (!key) return { ok: false, models: [], error: 'No API key' };
@@ -190,6 +227,14 @@ export async function openaiChatWithUsage(messages, options = {}) {
   if (!key) throw new Error('OpenAI API key is missing. Add it under Engine & models, then Save settings.');
   const model = String(options.model || c.llmModel || '').trim();
   if (!model) throw new Error('No OpenAI model selected.');
+  return openAiCompatibleChatWithUsage(OPENAI_CHAT_URL, key, messages, options, 'OpenAI');
+}
+
+async function openAiCompatibleChatWithUsage(url, apiKey, messages, options = {}, providerName = 'Provider') {
+  const model = String(options.model || getConfig().llmModel || '').trim();
+  if (!model) throw new Error(`No ${providerName} model selected.`);
+  const key = String(apiKey || '').trim();
+  if (!key) throw new Error(`${providerName} API key is missing.`);
   const timeoutMs = options.timeoutMs ?? 120000;
   const body = {
     model,
@@ -204,7 +249,7 @@ export async function openaiChatWithUsage(messages, options = {}) {
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const t0 = Date.now();
   try {
-    const res = await fetch(OPENAI_CHAT_URL, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
       body: JSON.stringify(body),
@@ -213,17 +258,17 @@ export async function openaiChatWithUsage(messages, options = {}) {
     const rawText = await res.text();
     const durationMs = Date.now() - t0;
     if (!res.ok) {
-      throw new Error(`OpenAI chat HTTP ${res.status}: ${rawText.slice(0, 400)}`);
+      throw new Error(`${providerName} chat HTTP ${res.status}: ${rawText.slice(0, 400)}`);
     }
     let data;
     try {
       data = JSON.parse(rawText);
     } catch {
-      throw new Error('OpenAI chat: invalid JSON');
+      throw new Error(`${providerName} chat: invalid JSON`);
     }
     const outMsg = data?.choices?.[0]?.message?.content;
     if (typeof outMsg !== 'string') {
-      logger.warn('OpenAI: unexpected response shape');
+      logger.warn(`${providerName}: unexpected response shape`);
       return { text: '', promptTokens: 0, completionTokens: 0, durationMs };
     }
     const u = data?.usage || {};
@@ -236,11 +281,27 @@ export async function openaiChatWithUsage(messages, options = {}) {
       durationMs,
     };
   } catch (e) {
-    if (String(e?.message || '').startsWith('OpenAI chat HTTP')) throw e;
-    throw new Error(explainFetchError(e, OPENAI_CHAT_URL, 'OpenAI'));
+    if (String(e?.message || '').startsWith(`${providerName} chat HTTP`)) throw e;
+    throw new Error(explainFetchError(e, url, providerName));
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function openrouterChatWithUsage(messages, options = {}) {
+  const c = getConfig();
+  const key = String(c.openrouterApiKey || '').trim();
+  if (!key) throw new Error('OpenRouter API key is missing. Add it under Engine & models, then Save settings.');
+  const model = String(options.model || c.llmModel || '').trim();
+  if (!model) throw new Error('No OpenRouter model selected.');
+  const base = String(c.openrouterBaseUrl || OPENROUTER_DEFAULT_BASE).replace(/\/$/, '');
+  return openAiCompatibleChatWithUsage(
+    `${base}/chat/completions`,
+    key,
+    messages,
+    { ...options, model },
+    'OpenRouter'
+  );
 }
 
 /**
@@ -262,6 +323,28 @@ export async function* openaiChatStream(messages, options = {}) {
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (options.stop) body.stop = options.stop;
   yield* openAiCompatibleChatStream(OPENAI_CHAT_URL, body, {
+    headers: { Authorization: `Bearer ${key}` },
+    timeoutMs: options.timeoutMs,
+  });
+}
+
+export async function* openrouterChatStream(messages, options = {}) {
+  const c = getConfig();
+  const key = String(c.openrouterApiKey || '').trim();
+  if (!key) throw new Error('OpenRouter API key is missing.');
+  const model = String(options.model || c.llmModel || '').trim();
+  if (!model) throw new Error('No OpenRouter model selected.');
+  const base = String(c.openrouterBaseUrl || OPENROUTER_DEFAULT_BASE).replace(/\/$/, '');
+  const body = {
+    model,
+    messages: messages.map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+    })),
+  };
+  if (options.temperature !== undefined) body.temperature = options.temperature;
+  if (options.stop) body.stop = options.stop;
+  yield* openAiCompatibleChatStream(`${base}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${key}` },
     timeoutMs: options.timeoutMs,
   });

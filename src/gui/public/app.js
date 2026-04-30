@@ -24,6 +24,8 @@ function syncSettingsGroupForTab(name) {
 }
 
 const MEMORY_SUBTAB_KEY = 'guiMemorySubtab';
+const MEMORY_BOT_KEY = 'guiMemoryBotId';
+let currentMemoryBotId = null;
 
 function setMemorySubtab(which) {
   const allowed = new Set(['bot', 'session', 'souls']);
@@ -466,6 +468,7 @@ function updateProviderVisibility() {
   $('wrapOllama').classList.toggle('hidden', p !== 'ollama');
   $('wrapLlama').classList.toggle('hidden', p !== 'llama-server');
   $('wrapOpenAi')?.classList.toggle('hidden', p !== 'openai');
+  $('wrapOpenRouter')?.classList.toggle('hidden', p !== 'openrouter');
   $('wrapGemini')?.classList.toggle('hidden', p !== 'gemini');
 }
 
@@ -520,17 +523,33 @@ function telegramSavedTokenPlaceholder(maskedFromApi) {
   return `xxxxxxxxxxxx-xxxx-${last4}`;
 }
 
+function renderTelegramTokenList(maskedTokens) {
+  const el = $('telegramTokenList');
+  if (!el) return;
+  const list = Array.isArray(maskedTokens) ? maskedTokens.filter(Boolean) : [];
+  if (!list.length) {
+    el.innerHTML = '<span class="hint">No bot tokens connected yet.</span>';
+    return;
+  }
+  el.innerHTML = list
+    .map(
+      (tok, idx) =>
+        `<span class="telegram-token-chip">Bot ${idx + 1}: ${escapeHtml(String(tok))}</span>`
+    )
+    .join('');
+}
+
 /** Replacing a stored Telegram token requires two separate OK confirmations. */
 function confirmReplaceSavedTelegramToken() {
   if (!lastSettingsForGui?.hasSavedToken) return true;
   const ok1 = window.confirm(
-    'A Telegram bot token is already saved on this machine.\n\n' +
-      'Do you want to replace it with the new token you entered?'
+    'Telegram bot token(s) are already saved on this machine.\n\n' +
+      'Do you want to add this new token to the connected bot list?'
   );
   if (!ok1) return false;
   const ok2 = window.confirm(
-    'Second confirmation: the saved bot token will be overwritten.\n\n' +
-      'Choose OK only if you intend to switch to a new token.'
+    'Second confirmation: this new token will be added and kept in settings.\n\n' +
+      'Choose OK only if this token belongs to your Telegram bot.'
   );
   return ok2;
 }
@@ -565,15 +584,19 @@ async function loadSettingsIntoForm() {
       tokInp.placeholder = '';
     }
   }
-  $('allowedUserIds').value = s.allowedUserIds || '';
+  renderTelegramTokenList(s.telegramBotTokensMasked);
   $('ollamaBaseUrl').value = s.ollamaBaseUrl || 'http://127.0.0.1:11434';
   $('llamaServerUrl').value = s.llamaServerUrl || 'http://127.0.0.1:8080';
   const prov = String(s.llmProvider || '').toLowerCase();
-  const allowed = ['ollama', 'llama-server', 'openai', 'gemini'];
+  const allowed = ['ollama', 'llama-server', 'openai', 'openrouter', 'gemini'];
   $('llmProvider').value = allowed.includes(prov) ? prov : 'llama-server';
   updateProviderVisibility();
 
   if ($('openaiApiKey')) $('openaiApiKey').value = '';
+  if ($('openrouterApiKey')) $('openrouterApiKey').value = '';
+  if ($('openrouterBaseUrl')) {
+    $('openrouterBaseUrl').value = s.openrouterBaseUrl || 'https://openrouter.ai/api/v1';
+  }
   if ($('geminiApiKey')) $('geminiApiKey').value = '';
   const oHint = $('openaiKeyHint');
   if (oHint) {
@@ -581,6 +604,14 @@ async function loadSettingsIntoForm() {
       oHint.textContent = `Key active (ends ${s.openaiApiKeyMasked.slice(-4)}) — paste to replace.`;
     } else {
       oHint.textContent = 'Create a key at platform.openai.com → API keys.';
+    }
+  }
+  const orHint = $('openrouterKeyHint');
+  if (orHint) {
+    if (s.hasOpenRouterKey && s.openrouterApiKeyMasked) {
+      orHint.textContent = `Key active (ends ${s.openrouterApiKeyMasked.slice(-4)}) — paste to replace.`;
+    } else {
+      orHint.textContent = 'Create a key at openrouter.ai/keys.';
     }
   }
   const gHint = $('geminiKeyHint');
@@ -603,12 +634,12 @@ async function loadSettingsIntoForm() {
   $('settingsPath').textContent = s.settingsPath || '';
 
   const hint = $('tokenHint');
-  if (s.hasSavedToken && s.telegramBotTokenMasked) {
+  if (s.hasSavedToken) {
     if (hint)
       hint.textContent =
-        'Token saved. To replace it, paste a new token and click the check (or Save settings) — you must approve twice.';
+        `Connected bots: ${Number(s.telegramBotCount || 0)}. Add another token with the check button (requires 2 confirmations).`;
   } else {
-    if (hint) hint.textContent = 'Paste token from @BotFather, then click the check to save.';
+    if (hint) hint.textContent = 'Paste token from @BotFather, then click the check to add the first bot.';
   }
 
   await refreshModelDropdown(String(s.llmModel || '').trim(), { resetSelection: false });
@@ -742,6 +773,7 @@ function formatLlmBackendLabel(provider) {
   const p = String(provider || '').toLowerCase();
   if (p === 'llama-server') return 'llama.cpp server (OpenAI API)';
   if (p === 'openai') return 'OpenAI (cloud)';
+  if (p === 'openrouter') return 'OpenRouter (cloud)';
   if (p === 'gemini') return 'Google Gemini (cloud)';
   return 'Ollama';
 }
@@ -1448,7 +1480,9 @@ function toggleSoulDetailRow(summaryRow) {
 }
 
 async function loadSouls() {
-  const r = await fetch('/api/data/souls');
+  const botId = getSelectedMemoryBotId();
+  const q = botId != null ? `?botId=${encodeURIComponent(String(botId))}` : '';
+  const r = await fetch('/api/data/souls' + q);
   const d = await r.json();
   const rows = (d.souls || []).map((u) => {
     const sum = u.preferences?.profile?.memorySummary
@@ -1515,7 +1549,12 @@ function applySoulToMemForm(soul) {
 }
 
 function getGlobalBotPersonaFromCache() {
-  const bp = lastSettingsForGui?.botPersona;
+  const botId = Number(currentMemoryBotId);
+  const byBot = lastSettingsForGui?.botPersonaByBotId;
+  const bp =
+    Number.isFinite(botId) && byBot && typeof byBot === 'object'
+      ? byBot[String(botId)] || lastSettingsForGui?.botPersona
+      : lastSettingsForGui?.botPersona;
   return bp && typeof bp === 'object' ? bp : {};
 }
 
@@ -1555,8 +1594,93 @@ function applyMemAddressFieldsFromSettings(bp) {
   if ($('memAddressUserMy')) $('memAddressUserMy').value = p.addressUserMy || '';
 }
 
+function getSelectedMemoryBotId() {
+  const id = Number(currentMemoryBotId);
+  return Number.isFinite(id) ? id : null;
+}
+
+function getMemoryBotLabel(botId, fallback = null) {
+  const names = lastSettingsForGui?.memoryBotNamesById;
+  const custom =
+    names && typeof names === 'object' ? String(names[String(botId)] || '').trim() : '';
+  return custom || fallback || `Bot ${botId}`;
+}
+
+function renderMemoryBotTabs(bots) {
+  const wrap = $('memBotTabs');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  const list = Array.isArray(bots) ? bots : [];
+  if (!list.length) {
+    wrap.innerHTML = '<span class="hint">No Telegram bot data yet.</span>';
+    currentMemoryBotId = null;
+    return;
+  }
+  for (let idx = 0; idx < list.length; idx += 1) {
+    const b = list[idx];
+    const botId = Number(b.botId);
+    if (!Number.isFinite(botId)) continue;
+    const tab = document.createElement('div');
+    tab.className = 'mem-bot-tab';
+    tab.dataset.botId = String(botId);
+    const on = currentMemoryBotId === botId;
+    tab.classList.toggle('active', on);
+    tab.setAttribute('role', 'button');
+    tab.setAttribute('tabindex', '0');
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    tab.innerHTML = `<span>${escapeHtml(getMemoryBotLabel(botId, `Bot ${idx + 1}`))}</span><button type="button" class="mem-bot-tab-edit" data-mem-bot-edit="${botId}" title="Rename tab">✎</button>`;
+    wrap.appendChild(tab);
+  }
+}
+
+async function saveMemoryBotTabName(botId, name) {
+  const existing =
+    lastSettingsForGui?.memoryBotNamesById && typeof lastSettingsForGui.memoryBotNamesById === 'object'
+      ? { ...lastSettingsForGui.memoryBotNamesById }
+      : {};
+  const n = String(name || '').trim();
+  if (n) existing[String(botId)] = n;
+  else delete existing[String(botId)];
+  const r = await fetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ memoryBotNamesById: existing }),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'Rename failed');
+  lastSettingsForGui = j.settings || lastSettingsForGui;
+}
+
+async function loadMemoryBotOptions() {
+  const prev = Number.isFinite(currentMemoryBotId) ? String(currentMemoryBotId) : '';
+  const r = await fetch('/api/memory/bots');
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'Failed to load Telegram bots');
+  const bots = (Array.isArray(d.bots) ? d.bots : []).filter((b) => Number.isFinite(Number(b.botId)));
+  let saved = '';
+  try {
+    saved = localStorage.getItem(MEMORY_BOT_KEY) || '';
+  } catch {
+    /* ignore */
+  }
+  const pick =
+    (saved && bots.some((x) => String(x.botId) === saved) && saved) ||
+    (prev && bots.some((x) => String(x.botId) === prev) && prev) ||
+    (bots[0] ? String(bots[0].botId) : '') ||
+    '';
+  currentMemoryBotId = pick ? Number(pick) : null;
+  try {
+    localStorage.setItem(MEMORY_BOT_KEY, pick);
+  } catch {
+    /* ignore */
+  }
+  renderMemoryBotTabs(bots);
+}
+
 async function loadMemorySessionsIntoSelects() {
-  const d = await fetch('/api/memory/sessions').then((r) => r.json());
+  const botId = getSelectedMemoryBotId();
+  const q = botId != null ? `?botId=${encodeURIComponent(String(botId))}` : '';
+  const d = await fetch('/api/memory/sessions' + q).then((r) => r.json());
   if (d.error) throw new Error(d.error);
   const sessions = d.sessions || [];
   const memSel = $('memSessionSelect');
@@ -1611,7 +1735,19 @@ async function loadMemorySessionsIntoSelects() {
 
 async function loadSoulForCurrentMemSession() {
   const uid = Number($('memSessionSelect')?.value);
-  if (!Number.isFinite(uid)) return;
+  if (!Number.isFinite(uid)) {
+    const g = getGlobalBotPersonaFromCache();
+    applyBotPersonaFieldsToForm(g);
+    applyMemAddressFieldsFromSettings(g);
+    if ($('memDisplayName')) $('memDisplayName').value = '';
+    if ($('memWhoAmI')) $('memWhoAmI').value = '';
+    if ($('memWork')) $('memWork').value = '';
+    if ($('memGender')) $('memGender').value = '';
+    if ($('memAge')) $('memAge').value = '';
+    if ($('memExtra')) $('memExtra').value = '';
+    if ($('memMemorySummary')) $('memMemorySummary').value = '';
+    return;
+  }
   const r = await fetch(`/api/soul/${uid}`);
   const soul = await r.json();
   if (soul.error) throw new Error(soul.error);
@@ -1620,9 +1756,10 @@ async function loadSoulForCurrentMemSession() {
 }
 
 async function loadDataTab() {
+  await loadMemoryBotOptions();
   await loadSouls();
   await loadMemorySessionsIntoSelects();
-  await loadSoulForCurrentMemSession();
+  await loadSoulForCurrentMemSession().catch(() => {});
 }
 
 function getGuiConsoleUserIdFromData(data) {
@@ -1816,7 +1953,6 @@ async function loadPending() {
 async function saveAll() {
   try {
     const body = {
-      allowedUserIds: $('allowedUserIds').value.trim(),
       llmProvider: $('llmProvider').value,
       ollamaBaseUrl: $('ollamaBaseUrl').value.trim(),
       llamaServerUrl: $('llamaServerUrl').value.trim(),
@@ -1833,16 +1969,19 @@ async function saveAll() {
     if (tok) {
       if (lastSettingsForGui?.hasSavedToken) {
         if (!confirmReplaceSavedTelegramToken()) {
-          setStatus('Save cancelled — bot token unchanged.', '');
+          setStatus('Save cancelled — bot tokens unchanged.', '');
           return;
         }
       }
-      body.telegramBotToken = tok;
+      body.telegramBotTokenAdd = tok;
     }
     setStatus('Saving…', '');
     const oa = $('openaiApiKey')?.value?.trim() || '';
     if (oa) body.openaiApiKey = oa;
-    const gm = $('geminiApiKey')?.value?.trim() || '';
+  const or = $('openrouterApiKey')?.value?.trim() || '';
+  if (or) body.openrouterApiKey = or;
+  body.openrouterBaseUrl = $('openrouterBaseUrl')?.value?.trim() || '';
+  const gm = $('geminiApiKey')?.value?.trim() || '';
     if (gm) body.geminiApiKey = gm;
     const r = await fetch('/api/settings', {
       method: 'POST',
@@ -1899,22 +2038,22 @@ async function saveTelegramTokenFromField() {
   }
   if (lastSettingsForGui?.hasSavedToken) {
     if (!confirmReplaceSavedTelegramToken()) {
-      setStatus('Token replace cancelled.', '');
+      setStatus('Token add cancelled.', '');
       return;
     }
   }
   if (btn) btn.disabled = true;
-  setStatus('Saving bot token…', '');
+  setStatus('Adding bot token…', '');
   try {
     const r = await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegramBotToken: tok }),
+      body: JSON.stringify({ telegramBotTokenAdd: tok }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Save failed');
-    logLine('Telegram bot token saved.');
-    setStatus('Bot token saved.', 'ok');
+    logLine('Telegram bot token added.');
+    setStatus('Bot token added.', 'ok');
     await loadSettingsIntoForm();
     await loadOverview();
   } catch (e) {
@@ -1938,8 +2077,8 @@ $('telegramBotToken')?.addEventListener('keydown', (ev) => {
 $('btnResetTelegram')?.addEventListener('click', async () => {
   const sure = window.confirm(
     'Reset Telegram setup?\n\n' +
-      'This removes the saved bot token and legacy auto-approve IDs from data/settings.json, clears pending/approved/blocked users in the database, and stops the bot if it is running. Chat history and memory are not removed.\n\n' +
-      'If your token is only in .env, edit or remove TELEGRAM_BOT_TOKEN / ALLOWED_USER_IDS there yourself.'
+      'This removes saved bot token(s), bot tab names, and bot-specific default personas from data/settings.json, clears Telegram access/identity records in the database, and stops the bot if it is running. Chat history and memory are not removed.\n\n' +
+      'If your token is only in .env, edit or remove TELEGRAM_BOT_TOKEN there yourself.'
   );
   if (!sure) return;
   setStatus('Resetting Telegram…', '');
@@ -2029,19 +2168,29 @@ if ($('btnSaveBotPersona')) {
 
 if ($('btnSaveBotPersonaGlobal')) {
   $('btnSaveBotPersonaGlobal').addEventListener('click', async () => {
-    setStatus('Saving global assistant defaults…', '');
+    const botId = getSelectedMemoryBotId();
+    if (!Number.isFinite(botId)) {
+      setStatus('Pick a bot first.', 'err');
+      return;
+    }
+    setStatus('Saving assistant defaults for selected bot…', '');
     try {
+      const byBot =
+        lastSettingsForGui?.botPersonaByBotId && typeof lastSettingsForGui.botPersonaByBotId === 'object'
+          ? { ...lastSettingsForGui.botPersonaByBotId }
+          : {};
+      byBot[String(botId)] = {
+        displayName: $('botDisplayName').value.trim(),
+        displayNameMy: $('botDisplayNameMy') ? $('botDisplayNameMy').value.trim() : '',
+        gender: $('botGender') ? $('botGender').value.trim() : '',
+        style: $('botStyle').value.trim(),
+        role: $('botRole').value.trim(),
+        addressUserEn: $('memAddressUserEn')?.value?.trim() || '',
+        addressUserMy: $('memAddressUserMy')?.value?.trim() || '',
+      };
       const body = {
         llmModel: $('llmModel')?.value?.trim() || '',
-        botPersona: {
-          displayName: $('botDisplayName').value.trim(),
-          displayNameMy: $('botDisplayNameMy') ? $('botDisplayNameMy').value.trim() : '',
-          gender: $('botGender') ? $('botGender').value.trim() : '',
-          style: $('botStyle').value.trim(),
-          role: $('botRole').value.trim(),
-          addressUserEn: $('memAddressUserEn')?.value?.trim() || '',
-          addressUserMy: $('memAddressUserMy')?.value?.trim() || '',
-        },
+        botPersonaByBotId: byBot,
       };
       const r = await fetch('/api/settings', {
         method: 'POST',
@@ -2050,8 +2199,8 @@ if ($('btnSaveBotPersonaGlobal')) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Save failed');
-      logLine('Global bot persona saved to settings.json.');
-      setStatus('Global assistant defaults saved.', 'ok');
+      logLine(`Assistant defaults saved for bot ${botId}.`);
+      setStatus('Bot-specific assistant defaults saved.', 'ok');
       await loadSettingsIntoForm();
     } catch (e) {
       setStatus(e.message, 'err');
@@ -2097,6 +2246,34 @@ if ($('btnCopyBotPersona')) {
 }
 
 $('panel-data')?.addEventListener('click', (ev) => {
+  const editBtn = ev.target.closest('[data-mem-bot-edit]');
+  if (editBtn) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const botId = Number(editBtn.getAttribute('data-mem-bot-edit'));
+    if (!Number.isFinite(botId)) return;
+    const current = getMemoryBotLabel(botId);
+    const next = window.prompt(`Rename tab for Bot ${botId}:`, current);
+    if (next == null) return;
+    saveMemoryBotTabName(botId, next)
+      .then(() => loadDataTab())
+      .catch((e) => setStatus(e.message, 'err'));
+    return;
+  }
+  const botTab = ev.target.closest('.mem-bot-tab');
+  if (botTab && botTab.dataset.botId) {
+    ev.preventDefault();
+    const next = Number(botTab.dataset.botId);
+    if (!Number.isFinite(next) || currentMemoryBotId === next) return;
+    currentMemoryBotId = next;
+    try {
+      localStorage.setItem(MEMORY_BOT_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+    loadDataTab().catch((e) => setStatus(e.message, 'err'));
+    return;
+  }
   const soulRow = ev.target.closest('.soul-summary-row');
   if (soulRow) {
     toggleSoulDetailRow(soulRow);
@@ -2109,6 +2286,20 @@ $('panel-data')?.addEventListener('click', (ev) => {
 });
 
 $('panel-data')?.addEventListener('keydown', (ev) => {
+  const botTab = ev.target.closest('.mem-bot-tab');
+  if (botTab && (ev.key === 'Enter' || ev.key === ' ')) {
+    ev.preventDefault();
+    const next = Number(botTab.dataset.botId);
+    if (!Number.isFinite(next) || currentMemoryBotId === next) return;
+    currentMemoryBotId = next;
+    try {
+      localStorage.setItem(MEMORY_BOT_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+    loadDataTab().catch((e) => setStatus(e.message, 'err'));
+    return;
+  }
   if (ev.key !== 'Enter' && ev.key !== ' ') return;
   const soulRow = ev.target.closest('.soul-summary-row');
   if (!soulRow) return;
@@ -2302,6 +2493,25 @@ $('panel-pending')?.addEventListener('click', async (ev) => {
   }
 });
 $('btnRefreshAccess').addEventListener('click', () => loadAccess().catch((e) => setStatus(e.message, 'err')));
+$('btnClearAccessAll')?.addEventListener('click', async () => {
+  const ok = window.confirm(
+    'Clear all access data?\n\nThis removes all pending, approved, and blocked Telegram access records. New messages will create fresh pending requests.'
+  );
+  if (!ok) return;
+  setStatus('Clearing access data…', '');
+  try {
+    const r = await fetch('/api/access/clear-all', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Clear access data failed');
+    logLine('All Telegram access records cleared.');
+    setStatus('Access data cleared.', 'ok');
+    await loadAccess();
+    await loadOverview();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Clear access data: ' + e.message);
+  }
+});
 for (const id of ['chatLimit']) {
   $(id)?.addEventListener('change', (ev) => {
     const val = String(ev.target?.value || '100');

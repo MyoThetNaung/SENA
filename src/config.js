@@ -37,22 +37,9 @@ function readSettingsFile() {
   }
 }
 
-function parseUserIds(raw) {
-  if (raw == null) return [];
-  if (Array.isArray(raw)) {
-    return raw
-      .map((x) => Number(x))
-      .filter((n) => Number.isFinite(n));
-  }
-  return String(raw)
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => {
-      const n = Number(s);
-      if (!Number.isFinite(n)) throw new Error(`Invalid user id in ALLOWED_USER_IDS: ${s}`);
-      return n;
-    });
+function isValidTelegramBotToken(raw) {
+  const t = String(raw ?? '').trim();
+  return /^\d+:[A-Za-z0-9_-]{20,}$/.test(t);
 }
 
 const defaultDb = path.join(runtimeRoot, 'data', 'assistant.db');
@@ -65,10 +52,21 @@ function resolveUserPath(p, defaultRelative) {
 
 function buildConfig() {
   const settings = readSettingsFile();
-  const telegramBotToken = String(
-    settings.telegramBotToken ?? process.env.TELEGRAM_BOT_TOKEN ?? ''
-  ).trim();
-  const allowedUserIds = parseUserIds(settings.allowedUserIds ?? process.env.ALLOWED_USER_IDS ?? '');
+  const envToken = String(process.env.TELEGRAM_BOT_TOKEN ?? '').trim();
+  const settingsToken = String(settings.telegramBotToken ?? '').trim();
+  const settingsTokens = Array.isArray(settings.telegramBotTokens)
+    ? settings.telegramBotTokens
+        .map((t) => String(t ?? '').trim())
+        .filter((t) => isValidTelegramBotToken(t))
+    : [];
+  const telegramBotTokens = settingsTokens.length
+    ? [...new Set(settingsTokens)]
+    : isValidTelegramBotToken(settingsToken)
+      ? [settingsToken]
+      : isValidTelegramBotToken(envToken)
+        ? [envToken]
+        : [];
+  const telegramBotToken = telegramBotTokens[0] || '';
   const ollamaBaseUrl = String(
     settings.ollamaBaseUrl ?? process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434'
   ).replace(/\/$/, '');
@@ -81,6 +79,7 @@ function buildConfig() {
   let llmProvider = 'llama-server';
   if (llmProviderRaw === 'ollama') llmProvider = 'ollama';
   else if (llmProviderRaw === 'openai') llmProvider = 'openai';
+  else if (llmProviderRaw === 'openrouter') llmProvider = 'openrouter';
   else if (llmProviderRaw === 'gemini' || llmProviderRaw === 'google') llmProvider = 'gemini';
   else if (llmProviderRaw === 'llama-server' || llmProviderRaw === 'llamacpp') llmProvider = 'llama-server';
   const openaiApiKey = String(
@@ -89,6 +88,12 @@ function buildConfig() {
   const geminiApiKey = String(
     settings.geminiApiKey ?? process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY ?? ''
   ).trim();
+  const openrouterApiKey = String(
+    settings.openrouterApiKey ?? process.env.OPENROUTER_API_KEY ?? ''
+  ).trim();
+  const openrouterBaseUrl = String(
+    settings.openrouterBaseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1'
+  ).replace(/\/$/, '');
   const llmModel = String(
     settings.llmModel ?? settings.ollamaModel ?? process.env.LLM_MODEL ?? process.env.OLLAMA_MODEL ?? 'llama3.2'
   );
@@ -129,6 +134,14 @@ function buildConfig() {
     settings.autoStartLlamaServer === true || process.env.AUTO_START_LLAMA_SERVER === '1';
 
   const rawPersona = settings.botPersona && typeof settings.botPersona === 'object' ? settings.botPersona : {};
+  const rawPersonaByBotId =
+    settings.botPersonaByBotId && typeof settings.botPersonaByBotId === 'object'
+      ? settings.botPersonaByBotId
+      : {};
+  const rawMemoryBotNamesById =
+    settings.memoryBotNamesById && typeof settings.memoryBotNamesById === 'object'
+      ? settings.memoryBotNamesById
+      : {};
   const botPersona = {
     displayName: String(rawPersona.displayName ?? '').trim(),
     displayNameMy: String(rawPersona.displayNameMy ?? '').trim(),
@@ -138,15 +151,37 @@ function buildConfig() {
     addressUserEn: String(rawPersona.addressUserEn ?? '').trim(),
     addressUserMy: String(rawPersona.addressUserMy ?? '').trim(),
   };
+  const botPersonaByBotId = {};
+  for (const [k, v] of Object.entries(rawPersonaByBotId)) {
+    if (!/^\d+$/.test(String(k))) continue;
+    const o = v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    botPersonaByBotId[String(k)] = {
+      displayName: String(o.displayName ?? '').trim(),
+      displayNameMy: String(o.displayNameMy ?? '').trim(),
+      gender: String(o.gender ?? '').trim(),
+      style: String(o.style ?? '').trim(),
+      role: String(o.role ?? '').trim(),
+      addressUserEn: String(o.addressUserEn ?? '').trim(),
+      addressUserMy: String(o.addressUserMy ?? '').trim(),
+    };
+  }
+  const memoryBotNamesById = {};
+  for (const [k, v] of Object.entries(rawMemoryBotNamesById)) {
+    if (!/^\d+$/.test(String(k))) continue;
+    const name = String(v ?? '').trim();
+    if (name) memoryBotNamesById[String(k)] = name;
+  }
 
   return {
     telegramBotToken,
-    allowedUserIds,
+    telegramBotTokens,
     ollamaBaseUrl,
     llamaServerUrl,
     llmProvider,
     openaiApiKey,
     geminiApiKey,
+    openrouterApiKey,
+    openrouterBaseUrl,
     llmModel,
     /** @deprecated use llmModel */
     ollamaModel: llmModel,
@@ -162,6 +197,8 @@ function buildConfig() {
     openBrowserGui,
     autoStartLlamaServer,
     botPersona,
+    botPersonaByBotId,
+    memoryBotNamesById,
   };
 }
 
@@ -196,9 +233,9 @@ export function saveSettingsToDisk(partial) {
 /** Required before starting the Telegram bot (CLI or GUI). */
 export function assertBotConfigReady() {
   const c = getConfig();
-  if (!c.telegramBotToken) {
+  if (!Array.isArray(c.telegramBotTokens) || !c.telegramBotTokens.length) {
     throw new Error(
-      'Telegram bot token is missing. Enter it in the Control Panel (npm run gui) or set TELEGRAM_BOT_TOKEN in .env.'
+      'Telegram bot token is missing. Add one or more bot tokens in the Control Panel (npm run gui) or set TELEGRAM_BOT_TOKEN in .env.'
     );
   }
 }

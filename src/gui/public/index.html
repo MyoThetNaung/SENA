@@ -485,6 +485,7 @@
               <option value="ollama">Ollama (local)</option>
               <option value="llama-server">llama.cpp server — local OpenAI-compatible API</option>
               <option value="openai">OpenAI — ChatGPT API (cloud)</option>
+              <option value="openrouter">OpenRouter API (cloud)</option>
               <option value="gemini">Google Gemini API (cloud)</option>
             </select>
 
@@ -497,6 +498,13 @@
               <label>Gemini API key (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>)</label>
               <input type="password" id="geminiApiKey" autocomplete="off" />
               <p class="hint" id="geminiKeyHint"></p>
+            </div>
+            <div id="wrapOpenRouter" class="hidden">
+              <label>OpenRouter API key (<a href="https://openrouter.ai/keys" target="_blank" rel="noopener">get a key</a>)</label>
+              <input type="password" id="openrouterApiKey" autocomplete="off" />
+              <p class="hint" id="openrouterKeyHint"></p>
+              <label>OpenRouter base URL</label>
+              <input type="text" id="openrouterBaseUrl" placeholder="https://openrouter.ai/api/v1" />
             </div>
 
             <div id="wrapOllama">
@@ -533,7 +541,7 @@
             </div>
           </h1>
           <div class="card">
-            <label>Bot token (only required field)</label>
+            <label>Add bot token</label>
             <div class="telegram-token-row">
               <input type="password" id="telegramBotToken" autocomplete="off" />
               <button
@@ -559,9 +567,10 @@
                 </svg>
               </button>
             </div>
+            <p class="hint">You can connect multiple bots. Add one token at a time.</p>
+            <label>Connected bot APIs (masked first 4 / last 4)</label>
+            <div id="telegramTokenList" class="telegram-token-list"></div>
             <p class="hint" id="tokenHint"></p>
-            <label>Legacy: auto-approve user IDs (optional)</label>
-            <input type="text" id="allowedUserIds" placeholder="comma-separated — skips approval queue" />
             <button type="button" id="btnResetTelegram" class="danger ghost wide">Reset Telegram setup</button>
           </div>
         </section>
@@ -585,6 +594,7 @@
           </p>
           <div class="toolbar">
             <button type="button" id="btnRefreshAccess" class="primary ghost">Refresh</button>
+            <button type="button" id="btnClearAccessAll" class="danger ghost">Clear all access data</button>
           </div>
           <h2>Pending approval</h2>
           <div class="table-wrap">
@@ -646,6 +656,10 @@
           </h1>
 
           <div class="toolbar mem-toolbar mem-toolbar-session">
+            <div class="mem-bot-tabs-wrap">
+              <div class="mem-bot-tabs-label">Bots</div>
+              <div id="memBotTabs" class="mem-bot-tabs" role="tablist" aria-label="Telegram bots"></div>
+            </div>
             <div class="session-select-wrap">
               <div class="session-select-row">
                 <label for="memSessionSelect">Session -</label>

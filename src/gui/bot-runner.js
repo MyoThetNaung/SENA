@@ -1,5 +1,5 @@
 import { createBot } from '../bot/telegram.js';
-import { assertBotConfigReady, reloadConfig } from '../config.js';
+import { assertBotConfigReady, getConfig, reloadConfig } from '../config.js';
 import { getDb } from '../db.js';
 import {
   startLlamaServerIfConfigured,
@@ -8,15 +8,15 @@ import {
 } from '../llm/llamaProcess.js';
 import { logger } from '../logger.js';
 
-let botInstance = null;
+let botInstances = [];
 let starting = false;
 
 export function getBotStatus() {
-  return { running: Boolean(botInstance), starting };
+  return { running: botInstances.length > 0, starting, botCount: botInstances.length };
 }
 
 export async function startBotFromGui() {
-  if (botInstance) {
+  if (botInstances.length > 0) {
     return { ok: false, error: 'Bot is already running.' };
   }
   if (starting) {
@@ -36,11 +36,24 @@ export async function startBotFromGui() {
       await stopLlamaServerIfWeStarted().catch(() => {});
       return { ok: false, error: reach.error || 'llama-server unreachable' };
     }
-    botInstance = await createBot();
-    return { ok: true };
+    const tokens = getConfig().telegramBotTokens || [];
+    const created = [];
+    for (let i = 0; i < tokens.length; i += 1) {
+      const bot = await createBot(tokens[i], i);
+      created.push(bot);
+    }
+    botInstances = created;
+    return { ok: true, botCount: botInstances.length };
   } catch (e) {
     logger.error(`GUI start bot: ${e.message}`);
-    botInstance = null;
+    for (const b of botInstances) {
+      try {
+        await b.stopPolling({ cancel: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    botInstances = [];
     await stopLlamaServerIfWeStarted().catch(() => {});
     return { ok: false, error: e.message || String(e) };
   } finally {
@@ -49,18 +62,21 @@ export async function startBotFromGui() {
 }
 
 export async function stopBotFromGui() {
-  if (!botInstance) {
+  if (!botInstances.length) {
     return { ok: false, error: 'Bot is not running.' };
   }
   try {
-    await botInstance.stopPolling({ cancel: true });
-    botInstance = null;
+    const running = [...botInstances];
+    for (const b of running) {
+      await b.stopPolling({ cancel: true });
+    }
+    botInstances = [];
     await stopLlamaServerIfWeStarted();
-    logger.info('Telegram polling stopped (GUI)');
-    return { ok: true };
+    logger.info('Telegram polling stopped (GUI, all bots)');
+    return { ok: true, botCount: 0 };
   } catch (e) {
     logger.error(`stopPolling: ${e.message}`);
-    botInstance = null;
+    botInstances = [];
     return { ok: false, error: e.message || String(e) };
   }
 }

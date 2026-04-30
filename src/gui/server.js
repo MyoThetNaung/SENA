@@ -28,11 +28,13 @@ import {
   setTelegramUserStatus,
   getTelegramLabelsForUserIds,
   clearTelegramAccessRecords,
+  listKnownTelegramBots,
+  SCOPED_USER_ID_OFFSET,
 } from '../access/telegramAccess.js';
 import { handleTextMessage } from '../core/orchestrator.js';
 import { GUI_CONSOLE_USER_ID } from '../const/guiSession.js';
 import { buildModelCatalog, probeLlamaServerReachable, normalizeCatalogLlmProvider } from '../llm/catalog.js';
-import { fetchOpenAiModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
+import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
 import { startBotFromGui, stopBotFromGui, getBotStatus } from './bot-runner.js';
 import {
   startLlamaServerIfConfigured,
@@ -47,8 +49,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, 'public');
 
 function maskToken(t) {
-  if (!t || t.length < 8) return '';
-  return `••••••••${t.slice(-4)}`;
+  const s = String(t || '').trim();
+  if (!s) return '';
+  if (s.length <= 8) return s;
+  return `${s.slice(0, 4)}...${s.slice(-4)}`;
+}
+
+function isValidTelegramBotToken(raw) {
+  const t = String(raw ?? '').trim();
+  return /^\d+:[A-Za-z0-9_-]{20,}$/.test(t);
 }
 
 function listGgufInFolder(dir) {
@@ -96,12 +105,14 @@ function readSettingsForApi() {
   } catch {
     /* ignore */
   }
-  const fileTok = String(raw.telegramBotToken || '').trim();
-  const envTok = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
-  const hasSavedToken = Boolean(fileTok || envTok);
+  const effectiveTokens = Array.isArray(c.telegramBotTokens) ? c.telegramBotTokens : [];
+  const hasSavedToken = effectiveTokens.length > 0;
   const fileOpenai = String(raw.openaiApiKey || '').trim();
   const envOpenai = String(process.env.OPENAI_API_KEY || '').trim();
   const hasOpenAiKey = Boolean(fileOpenai || envOpenai);
+  const fileOpenRouter = String(raw.openrouterApiKey || '').trim();
+  const envOpenRouter = String(process.env.OPENROUTER_API_KEY || '').trim();
+  const hasOpenRouterKey = Boolean(fileOpenRouter || envOpenRouter);
   const fileGem = String(raw.geminiApiKey || '').trim();
   const envGem = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
   const hasGeminiKey = Boolean(fileGem || envGem);
@@ -122,8 +133,9 @@ function readSettingsForApi() {
   const out = {
     projectRoot,
     telegramBotTokenMasked: maskToken(c.telegramBotToken),
+    telegramBotTokensMasked: effectiveTokens.map((t) => maskToken(t)).filter(Boolean),
+    telegramBotCount: effectiveTokens.length,
     hasSavedToken,
-    allowedUserIds: (c.allowedUserIds || []).join(', '),
     llmProvider: c.llmProvider,
     ollamaBaseUrl: c.ollamaBaseUrl,
     llamaServerUrl: c.llamaServerUrl,
@@ -143,13 +155,18 @@ function readSettingsForApi() {
     openBrowserGui: c.openBrowserGui,
     autoStartLlamaServer: c.autoStartLlamaServer,
     botPersona: c.botPersona,
+    botPersonaByBotId: c.botPersonaByBotId || {},
+    memoryBotNamesById: c.memoryBotNamesById || {},
     settingsPath: rawPath,
     settingsFileExists: fileExists,
     ggufFolder: gguf.folder,
     ggufFiles: gguf.files,
     hasOpenAiKey,
+    hasOpenRouterKey,
     hasGeminiKey,
     openaiApiKeyMasked: maskToken(c.openaiApiKey),
+    openrouterApiKeyMasked: maskToken(c.openrouterApiKey),
+    openrouterBaseUrl: c.openrouterBaseUrl,
     geminiApiKeyMasked: maskToken(c.geminiApiKey),
   };
   if (gguf.error) out.ggufError = gguf.error;
@@ -178,10 +195,24 @@ export function createGuiApp() {
 
       if (typeof b.telegramBotToken === 'string') {
         const t = b.telegramBotToken.trim();
-        if (t) patch.telegramBotToken = t;
+        if (t) {
+          if (!isValidTelegramBotToken(t)) throw new Error('Invalid Telegram bot token format.');
+          patch.telegramBotToken = t;
+          patch.telegramBotTokens = [t];
+        }
       }
-      if (typeof b.allowedUserIds === 'string') {
-        patch.allowedUserIds = b.allowedUserIds.trim();
+      if (typeof b.telegramBotTokenAdd === 'string') {
+        const t = b.telegramBotTokenAdd.trim();
+        if (t) {
+          if (!isValidTelegramBotToken(t)) throw new Error('Invalid Telegram bot token format.');
+          const current = Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+          patch.telegramBotTokens = [...new Set([...current, t])];
+          patch.telegramBotToken = patch.telegramBotTokens[0] || t;
+        }
+      }
+      if (b.telegramBotTokensClear === true) {
+        patch.telegramBotTokens = null;
+        patch.telegramBotToken = null;
       }
       if (typeof b.llmProvider === 'string') {
         const p = b.llmProvider.toLowerCase();
@@ -190,6 +221,7 @@ export function createGuiApp() {
           'llama-server': 'llama-server',
           llamacpp: 'llama-server',
           openai: 'openai',
+          openrouter: 'openrouter',
           gemini: 'gemini',
           google: 'gemini',
         };
@@ -203,11 +235,18 @@ export function createGuiApp() {
         const t = b.geminiApiKey.trim();
         if (t) patch.geminiApiKey = t;
       }
+      if (typeof b.openrouterApiKey === 'string') {
+        const t = b.openrouterApiKey.trim();
+        if (t) patch.openrouterApiKey = t;
+      }
       if (typeof b.ollamaBaseUrl === 'string' && b.ollamaBaseUrl.trim()) {
         patch.ollamaBaseUrl = b.ollamaBaseUrl.trim().replace(/\/$/, '');
       }
       if (typeof b.llamaServerUrl === 'string' && b.llamaServerUrl.trim()) {
         patch.llamaServerUrl = b.llamaServerUrl.trim().replace(/\/$/, '');
+      }
+      if (typeof b.openrouterBaseUrl === 'string' && b.openrouterBaseUrl.trim()) {
+        patch.openrouterBaseUrl = b.openrouterBaseUrl.trim().replace(/\/$/, '');
       }
       const modelPick =
         typeof b.llmModel === 'string' && b.llmModel.trim()
@@ -267,6 +306,40 @@ export function createGuiApp() {
           addressUserMy: typeof bp.addressUserMy === 'string' ? bp.addressUserMy : '',
         };
       }
+      if (
+        b.botPersonaByBotId &&
+        typeof b.botPersonaByBotId === 'object' &&
+        !Array.isArray(b.botPersonaByBotId)
+      ) {
+        const out = {};
+        for (const [k, raw] of Object.entries(b.botPersonaByBotId)) {
+          if (!/^\d+$/.test(String(k))) continue;
+          const bp = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+          out[String(k)] = {
+            displayName: typeof bp.displayName === 'string' ? bp.displayName : '',
+            displayNameMy: typeof bp.displayNameMy === 'string' ? bp.displayNameMy : '',
+            gender: typeof bp.gender === 'string' ? bp.gender : '',
+            style: typeof bp.style === 'string' ? bp.style : '',
+            role: typeof bp.role === 'string' ? bp.role : '',
+            addressUserEn: typeof bp.addressUserEn === 'string' ? bp.addressUserEn : '',
+            addressUserMy: typeof bp.addressUserMy === 'string' ? bp.addressUserMy : '',
+          };
+        }
+        patch.botPersonaByBotId = out;
+      }
+      if (
+        b.memoryBotNamesById &&
+        typeof b.memoryBotNamesById === 'object' &&
+        !Array.isArray(b.memoryBotNamesById)
+      ) {
+        const out = {};
+        for (const [k, raw] of Object.entries(b.memoryBotNamesById)) {
+          if (!/^\d+$/.test(String(k))) continue;
+          const name = String(raw ?? '').trim();
+          if (name) out[String(k)] = name;
+        }
+        patch.memoryBotNamesById = out;
+      }
 
       saveSettingsToDisk(patch);
       const nextDb = getConfig().databasePath;
@@ -280,14 +353,19 @@ export function createGuiApp() {
     }
   });
 
-  /** Saved token + legacy auto-approve IDs + SQLite access list. Stops bot if running. Does not edit .env. */
+  /** Saved tokens + bot naming/persona metadata + SQLite access list. Stops bot if running. Does not edit .env. */
   app.post('/api/settings/reset-telegram', async (req, res) => {
     try {
       const stopOut = await stopBotFromGui();
       if (!stopOut.ok && stopOut.error !== 'Bot is not running.') {
         logger.warn(`reset-telegram: could not stop bot cleanly: ${stopOut.error}`);
       }
-      saveSettingsToDisk({ telegramBotToken: null, allowedUserIds: null });
+      saveSettingsToDisk({
+        telegramBotToken: null,
+        telegramBotTokens: null,
+        memoryBotNamesById: null,
+        botPersonaByBotId: null,
+      });
       clearTelegramAccessRecords();
       syncLoggerLevel();
       res.json({ ok: true, settings: readSettingsForApi() });
@@ -352,6 +430,9 @@ export function createGuiApp() {
       } else if (c.llmProvider === 'openai') {
         const r = await fetchOpenAiModelNames(c.openaiApiKey);
         cloudReachable = r.ok;
+      } else if (c.llmProvider === 'openrouter') {
+        const r = await fetchOpenRouterModelNames(c.openrouterApiKey, c.openrouterBaseUrl);
+        cloudReachable = r.ok;
       } else if (c.llmProvider === 'gemini') {
         const r = await fetchGeminiModelNames(c.geminiApiKey);
         cloudReachable = r.ok;
@@ -363,6 +444,8 @@ export function createGuiApp() {
             ? c.ollamaBaseUrl
             : c.llmProvider === 'openai'
               ? 'https://api.openai.com/v1'
+              : c.llmProvider === 'openrouter'
+                ? c.openrouterBaseUrl
               : c.llmProvider === 'gemini'
                 ? 'https://generativelanguage.googleapis.com'
                 : '';
@@ -371,7 +454,7 @@ export function createGuiApp() {
           ? listening
           : c.llmProvider === 'ollama'
             ? ollamaReachable
-            : c.llmProvider === 'openai' || c.llmProvider === 'gemini'
+            : c.llmProvider === 'openai' || c.llmProvider === 'openrouter' || c.llmProvider === 'gemini'
               ? cloudReachable
               : false;
       res.json({
@@ -570,13 +653,37 @@ export function createGuiApp() {
     }
   });
 
+  app.post('/api/access/clear-all', (req, res) => {
+    try {
+      getDb();
+      clearTelegramAccessRecords();
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get('/api/memory/sessions', (req, res) => {
     try {
       getDb();
-      const fromChat = listChatUserIds();
-      const soulRows = listSouls();
+      const botId = req.query.botId != null && req.query.botId !== '' ? Number(req.query.botId) : null;
+      const scopedRows = Number.isFinite(botId)
+        ? getDb()
+            .prepare('SELECT id FROM telegram_identity_map WHERE bot_id = ?')
+            .all(botId)
+        : [];
+      const scopedSet = new Set(
+        scopedRows.map((r) => SCOPED_USER_ID_OFFSET + Number(r.id)).filter((n) => Number.isFinite(n))
+      );
+      const fromChat = Number.isFinite(botId)
+        ? listChatUserIds().filter((id) => scopedSet.has(Number(id)))
+        : listChatUserIds();
+      const soulRows = listSouls(Number.isFinite(botId) ? { botId } : {});
       const fromSoul = soulRows.map((s) => s.user_id);
-      const set = new Set([...fromChat, ...fromSoul, GUI_CONSOLE_USER_ID]);
+      const set = new Set([...fromChat, ...fromSoul]);
+      if (!Number.isFinite(botId)) {
+        set.add(GUI_CONSOLE_USER_ID);
+      }
       const ids = [...set].sort((a, b) => {
         if (a === GUI_CONSOLE_USER_ID) return -1;
         if (b === GUI_CONSOLE_USER_ID) return 1;
@@ -698,8 +805,18 @@ export function createGuiApp() {
 
   app.get('/api/data/souls', (req, res) => {
     try {
-      const rows = listSouls();
+      const botId = req.query.botId != null && req.query.botId !== '' ? Number(req.query.botId) : null;
+      const rows = listSouls(Number.isFinite(botId) ? { botId } : {});
       res.json({ souls: rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/memory/bots', (req, res) => {
+    try {
+      getDb();
+      res.json({ bots: listKnownTelegramBots() });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

@@ -1,5 +1,5 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { touchTelegramUser } from '../access/telegramAccess.js';
+import { resolveScopedTelegramUserId, touchTelegramUser } from '../access/telegramAccess.js';
 import { appendChatMessage } from '../chat/chatLog.js';
 import { getConfig } from '../config.js';
 import { handleConfirmCallback, handleTextMessage } from '../core/orchestrator.js';
@@ -32,12 +32,14 @@ function telegramErrorHint(err) {
   return '';
 }
 
-export async function createBot() {
-  const bot = new TelegramBot(getConfig().telegramBotToken, { polling: false });
+export async function createBot(token, index = 0) {
+  const bot = new TelegramBot(String(token || '').trim(), { polling: false });
+  let botId = null;
 
   try {
     const me = await bot.getMe();
-    logger.info(`Telegram: @${me.username} (id ${me.id}) — token OK`);
+    botId = Number(me.id);
+    logger.info(`Telegram[${index + 1}]: @${me.username} (id ${me.id}) — token OK`);
   } catch (err) {
     const hint = telegramErrorHint(err);
     logger.error(`Telegram getMe failed: ${err?.message || err}.${hint}`);
@@ -49,11 +51,19 @@ export async function createBot() {
   });
 
   bot.on('message', async (msg) => {
-    const userId = msg.from?.id;
+    const rawUserId = msg.from?.id;
+    let userId = null;
     const chatId = msg.chat?.id;
-    if (!userId || chatId == null) return;
+    if (!rawUserId || chatId == null) return;
+    try {
+      userId = resolveScopedTelegramUserId(botId, msg.from);
+    } catch (e) {
+      logger.error(`resolveScopedTelegramUserId failed: ${e.message}`);
+      await bot.sendMessage(chatId, 'Could not open a scoped session for this account.').catch(() => {});
+      return;
+    }
 
-    const access = touchTelegramUser(userId, msg.from, previewFromMessage(msg));
+    const access = touchTelegramUser(userId, msg.from, previewFromMessage(msg), rawUserId);
     if (access === 'blocked') {
       await bot.sendMessage(
         chatId,
@@ -94,12 +104,20 @@ export async function createBot() {
   });
 
   bot.on('callback_query', async (q) => {
-    const userId = q.from?.id;
+    const rawUserId = q.from?.id;
+    let userId = null;
     const chatId = q.message?.chat?.id;
     const qid = q.id;
-    if (!userId || chatId == null) return;
+    if (!rawUserId || chatId == null) return;
+    try {
+      userId = resolveScopedTelegramUserId(botId, q.from);
+    } catch (e) {
+      logger.error(`resolveScopedTelegramUserId callback failed: ${e.message}`);
+      await bot.answerCallbackQuery(qid, { text: 'Session error' }).catch(() => {});
+      return;
+    }
 
-    const access = touchTelegramUser(userId, q.from, '[callback]');
+    const access = touchTelegramUser(userId, q.from, '[callback]', rawUserId);
     if (access === 'blocked') {
       await bot.answerCallbackQuery(qid, { text: 'Access denied' }).catch(() => {});
       return;
@@ -127,6 +145,6 @@ export async function createBot() {
   });
 
   await bot.startPolling();
-  logger.info('Telegram bot polling started');
+  logger.info(`Telegram[${index + 1}] bot polling started`);
   return bot;
 }

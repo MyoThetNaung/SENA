@@ -1,4 +1,5 @@
 import { getConfig } from '../config.js';
+import { getBotIdForScopedUserId } from '../access/telegramAccess.js';
 import { getSoul } from '../memory/soul.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
@@ -6,7 +7,14 @@ import { startLlamaServerIfConfigured } from './llamaProcess.js';
 import { recordLlmUsage } from './tokenUsage.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import { sanitizeChatCompletionText, CHAT_TEMPLATE_STOP_SEQUENCES } from './sanitizeCompletion.js';
-import { openaiChatWithUsage, openaiChatStream, geminiChatWithUsage, openAiCompatibleChatStream } from './cloudLlm.js';
+import {
+  openaiChatWithUsage,
+  openaiChatStream,
+  openrouterChatWithUsage,
+  openrouterChatStream,
+  geminiChatWithUsage,
+  openAiCompatibleChatStream,
+} from './cloudLlm.js';
 
 export { sanitizeChatCompletionText };
 
@@ -18,7 +26,13 @@ Do not hallucinate.
 Ask for confirmation before performing actions.`;
 
 function mergeBotPersonaForUserId(userId) {
-  const global = getConfig().botPersona || {};
+  const cfg = getConfig();
+  const botId = getBotIdForScopedUserId(userId);
+  const globalByBot =
+    botId != null && cfg.botPersonaByBotId && typeof cfg.botPersonaByBotId === 'object'
+      ? cfg.botPersonaByBotId[String(botId)] || {}
+      : {};
+  const global = Object.keys(globalByBot).length ? globalByBot : cfg.botPersona || {};
   const uid = Number(userId);
   if (!Number.isFinite(uid)) return { ...global };
   const soul = getSoul(uid);
@@ -58,6 +72,7 @@ const RUNTIME_LLM_LABELS = {
   ollama: 'Ollama (local)',
   'llama-server': 'llama.cpp server (local OpenAI-compatible API)',
   openai: 'OpenAI API (cloud)',
+  openrouter: 'OpenRouter API (cloud)',
   gemini: 'Google Gemini API (cloud)',
 };
 
@@ -288,6 +303,17 @@ export async function chat(messages, options = {}) {
     });
     return r.text;
   }
+  if (provider === 'openrouter') {
+    const r = await openrouterChatWithUsage(messages, options);
+    recordLlmUsage({
+      provider: 'openrouter',
+      model,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      durationMs: r.durationMs,
+    });
+    return r.text;
+  }
   if (provider === 'gemini') {
     const r = await geminiChatWithUsage(messages, options);
     recordLlmUsage({
@@ -371,6 +397,10 @@ export async function* chatStream(messages, options = {}) {
 
   if (provider === 'openai') {
     yield* openaiChatStream(messages, { ...options, model, timeoutMs, stop });
+    return;
+  }
+  if (provider === 'openrouter') {
+    yield* openrouterChatStream(messages, { ...options, model, timeoutMs, stop });
     return;
   }
 

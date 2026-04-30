@@ -4,7 +4,7 @@ import path from 'path';
 import { getConfig } from '../config.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
-import { fetchOpenAiModelNames, fetchGeminiModelNames } from './cloudLlm.js';
+import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from './cloudLlm.js';
 
 async function safeJson(res) {
   const t = await res.text();
@@ -154,7 +154,7 @@ export async function fetchLlamaServerModelNames(baseUrl) {
 export function normalizeCatalogLlmProvider(raw) {
   const x = String(raw || '').toLowerCase().trim();
   if (x === 'google') return 'gemini';
-  if (['ollama', 'llama-server', 'openai', 'gemini'].includes(x)) return x;
+  if (['ollama', 'llama-server', 'openai', 'openrouter', 'gemini'].includes(x)) return x;
   return null;
 }
 
@@ -200,6 +200,8 @@ export async function buildModelCatalog(opts = {}) {
     remote = await fetchOllamaModelNames(c.ollamaBaseUrl);
   } else if (llmProvider === 'openai') {
     remote = await fetchOpenAiModelNames(c.openaiApiKey);
+  } else if (llmProvider === 'openrouter') {
+    remote = await fetchOpenRouterModelNames(c.openrouterApiKey, c.openrouterBaseUrl);
   } else if (llmProvider === 'gemini') {
     remote = await fetchGeminiModelNames(c.geminiApiKey);
   }

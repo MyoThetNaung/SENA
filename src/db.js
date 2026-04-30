@@ -90,6 +90,17 @@ function migrate(db) {
       last_seen TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_telegram_users_status ON telegram_users(status);
+    CREATE TABLE IF NOT EXISTS telegram_identity_map (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bot_id INTEGER NOT NULL,
+      telegram_user_id INTEGER NOT NULL,
+      username TEXT,
+      first_name TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(bot_id, telegram_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_telegram_identity_bot_user ON telegram_identity_map(bot_id, telegram_user_id);
 
     CREATE TABLE IF NOT EXISTS llm_usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
