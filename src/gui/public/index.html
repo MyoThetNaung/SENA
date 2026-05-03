@@ -15,6 +15,14 @@
   <body>
     <header class="window-bar" aria-label="Window controls">
       <div class="window-bar-brand" title="SENA">
+        <img
+          class="window-bar-logo"
+          src="/sena-logo.svg"
+          width="16"
+          height="16"
+          alt=""
+          decoding="async"
+        />
         <span class="window-bar-title">SENA</span>
       </div>
       <div class="window-controls">
@@ -933,19 +941,26 @@
               </label>
             </div>
           </h1>
-          <button type="button" id="btnRefreshCal" class="primary ghost">Refresh</button>
-          <div class="table-wrap">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Starts</th>
-                  <th>User</th>
-                  <th>Title</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="calBody"></tbody>
-            </table>
+          <div class="calendar-toolbar">
+            <div class="calendar-nav">
+              <button type="button" id="btnCalPrev" class="primary ghost" aria-label="Previous month">←</button>
+              <button type="button" id="btnCalToday" class="primary ghost">Today</button>
+              <button type="button" id="btnCalNext" class="primary ghost" aria-label="Next month">→</button>
+            </div>
+            <div id="calMonthLabel" class="calendar-month-label" aria-live="polite"></div>
+            <button type="button" id="btnRefreshCal" class="primary ghost">Refresh</button>
+          </div>
+          <div class="calendar-month-wrap">
+            <div class="calendar-weekdays" aria-hidden="true">
+              <span>Sun</span>
+              <span>Mon</span>
+              <span>Tue</span>
+              <span>Wed</span>
+              <span>Thu</span>
+              <span>Fri</span>
+              <span>Sat</span>
+            </div>
+            <div id="calMonthGrid" class="calendar-month-grid"></div>
           </div>
         </section>
 
@@ -1085,6 +1100,16 @@
       <div class="arrow"></div>
       <div class="arrow"></div>
       <div class="arrow"></div>
+    </div>
+    <div id="calendarDayModal" class="calendar-modal" hidden>
+      <div class="calendar-modal-backdrop" data-cal-modal-close="backdrop"></div>
+      <div class="calendar-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="calendarDayModalTitle">
+        <div class="calendar-modal-header">
+          <h3 id="calendarDayModalTitle">Events</h3>
+          <button type="button" class="btn-mini danger" id="btnCalendarModalClose" aria-label="Close">Close</button>
+        </div>
+        <div id="calendarDayModalBody" class="calendar-modal-body"></div>
+      </div>
     </div>
     <script src="/app.js"></script>
   </body>

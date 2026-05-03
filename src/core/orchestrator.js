@@ -10,7 +10,7 @@ import {
 import { decideIntent } from './intent.js';
 import { formatSoulForPrompt, getSoul, ensureSoul } from '../memory/soul.js';
 import { searchAndSummarize } from '../tools/browser.js';
-import { clearPending, getPending, setPending } from './pending.js';
+import { clearPending, getPending } from './pending.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 
@@ -101,14 +101,13 @@ async function handleCalendar(userId, text) {
       return 'The event time was not valid. Please rephrase with a clear date/time.';
     }
     starts = d.toISOString();
-    setPending(userId, 'add_event', { title, starts_at: starts });
-    const when = new Date(starts).toLocaleString();
-    return (
-      `I will add this calendar event:\n` +
-      `• ${title}\n` +
-      `• ${when}\n\n` +
-      `Reply Yes to confirm or No to cancel.`
-    );
+    try {
+      const ev = addEvent(userId, starts, title);
+      const when = new Date(ev.starts_at).toLocaleString();
+      return `Added: "${ev.title}" at ${when}.`;
+    } catch (e) {
+      return `Could not add event: ${e.message}`;
+    }
   }
   const rows = getUpcomingEvents(userId);
   return `Upcoming events:\n${formatEvents(rows)}`;

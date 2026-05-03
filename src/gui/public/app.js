@@ -1921,15 +1921,133 @@ async function sendChatFromGui() {
   }
 }
 
+const calendarViewState = { year: new Date().getFullYear(), month: new Date().getMonth() };
+let calendarEventsCache = [];
+
+function formatEventTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function monthLabel(year, month) {
+  return new Date(year, month, 1).toLocaleDateString([], { month: 'long', year: 'numeric' });
+}
+
+function formatEventDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso || '');
+  return d.toLocaleString();
+}
+
+function openCalendarDayModal(dayDate, events) {
+  const modal = $('calendarDayModal');
+  const title = $('calendarDayModalTitle');
+  const body = $('calendarDayModalBody');
+  if (!modal || !title || !body) return;
+
+  title.textContent = `Events on ${dayDate.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
+  body.innerHTML = events
+    .map((e) => {
+      const id = Number(e.id);
+      const userId = Number(e.user_id);
+      const createdAt = e.created_at ? formatEventDateTime(e.created_at) : '—';
+      return `<article class="calendar-modal-event">
+        <p><strong>Title:</strong> ${escapeHtml(e.title || '')}</p>
+        <p><strong>Starts:</strong> ${escapeHtml(formatEventDateTime(e.starts_at))}</p>
+        <p><strong>User ID:</strong> ${escapeHtml(Number.isFinite(userId) ? String(userId) : String(e.user_id || ''))}</p>
+        <p><strong>Event ID:</strong> ${escapeHtml(Number.isFinite(id) ? String(id) : String(e.id || ''))}</p>
+        <p><strong>Created:</strong> ${escapeHtml(createdAt)}</p>
+      </article>`;
+    })
+    .join('');
+  modal.hidden = false;
+}
+
+function closeCalendarDayModal() {
+  const modal = $('calendarDayModal');
+  if (!modal) return;
+  modal.hidden = true;
+}
+
+function renderCalendarMonth() {
+  const grid = $('calMonthGrid');
+  const label = $('calMonthLabel');
+  if (!grid || !label) return;
+
+  const year = calendarViewState.year;
+  const month = calendarViewState.month;
+  label.textContent = monthLabel(year, month);
+
+  const first = new Date(year, month, 1);
+  const startOffset = first.getDay();
+  const gridStart = new Date(year, month, 1 - startOffset);
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+
+  const eventsByDay = new Map();
+  for (const e of calendarEventsCache) {
+    const d = new Date(e.starts_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (!eventsByDay.has(key)) eventsByDay.set(key, []);
+    eventsByDay.get(key).push(e);
+  }
+  for (const list of eventsByDay.values()) {
+    list.sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+  }
+
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const day = new Date(gridStart);
+    day.setDate(gridStart.getDate() + i);
+    const dayKey = `${day.getFullYear()}-${day.getMonth()}-${day.getDate()}`;
+    const inMonth = day.getMonth() === month;
+    const isToday = dayKey === todayKey;
+    const events = eventsByDay.get(dayKey) || [];
+    const eventsHtml = events.length
+      ? events
+          .map((e) => {
+            const id = Number(e.id);
+            const canDelete = Number.isFinite(id) ? String(id) : '';
+            const time = formatEventTime(e.starts_at);
+            return `<div class="cal-event-chip" title="${escapeHtml(e.title)}"><span class="cal-event-time">${escapeHtml(
+              time
+            )}</span><span class="cal-event-title">${escapeHtml(e.title)}</span><button type="button" class="btn-mini danger cal-event-delete" data-cal-delete="${canDelete}">×</button></div>`;
+          })
+          .join('')
+      : '';
+    cells.push(
+      `<div class="cal-day${inMonth ? '' : ' is-outside'}${isToday ? ' is-today' : ''}${
+        events.length ? ' has-events' : ''
+      }" data-cal-day="${dayKey}"><div class="cal-day-number">${day.getDate()}</div><div class="cal-day-events">${
+        eventsHtml || '<div class="cal-day-empty"></div>'
+      }</div></div>`
+    );
+  }
+
+  grid.innerHTML = cells.join('');
+}
+
+function shiftCalendarMonth(delta) {
+  const next = new Date(calendarViewState.year, calendarViewState.month + delta, 1);
+  calendarViewState.year = next.getFullYear();
+  calendarViewState.month = next.getMonth();
+  renderCalendarMonth();
+}
+
+function jumpCalendarToToday() {
+  const now = new Date();
+  calendarViewState.year = now.getFullYear();
+  calendarViewState.month = now.getMonth();
+  renderCalendarMonth();
+}
+
 async function loadCalendar() {
   const r = await fetch('/api/data/calendar?limit=500');
   const d = await r.json();
-  const rows = (d.events || []).map((e) => {
-    const when = e.starts_at ? new Date(e.starts_at).toLocaleString() : '';
-    const id = Number(e.id);
-    return `<tr><td>${escapeHtml(when)}</td><td>${e.user_id}</td><td class="msg">${escapeHtml(e.title)}</td><td class="nowrap"><button type="button" class="btn-mini danger" data-cal-delete="${Number.isFinite(id) ? id : ''}">Delete</button></td></tr>`;
-  });
-  $('calBody').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="4" class="hint">No events.</td></tr>';
+  calendarEventsCache = Array.isArray(d.events) ? d.events : [];
+  renderCalendarMonth();
 }
 
 async function loadPending() {
@@ -2443,9 +2561,30 @@ if ($('btnCopyMemSession')) {
   });
 }
 $('btnRefreshCal').addEventListener('click', () => loadCalendar().catch(() => {}));
+$('btnCalPrev')?.addEventListener('click', () => shiftCalendarMonth(-1));
+$('btnCalNext')?.addEventListener('click', () => shiftCalendarMonth(1));
+$('btnCalToday')?.addEventListener('click', () => jumpCalendarToToday());
 $('btnRefreshPending').addEventListener('click', () => loadPending().catch(() => {}));
 
 $('panel-calendar')?.addEventListener('click', async (ev) => {
+  const dayCell = ev.target.closest('[data-cal-day]');
+  if (dayCell && !ev.target.closest('[data-cal-delete]')) {
+    const key = String(dayCell.getAttribute('data-cal-day') || '');
+    if (key) {
+      const dayEvents = calendarEventsCache
+        .filter((e) => {
+          const d = new Date(e.starts_at);
+          if (Number.isNaN(d.getTime())) return false;
+          return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === key;
+        })
+        .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+      if (dayEvents.length) {
+        const [y, m, d] = key.split('-').map((n) => Number(n));
+        openCalendarDayModal(new Date(y, m, d), dayEvents);
+      }
+    }
+    return;
+  }
   const btn = ev.target.closest('[data-cal-delete]');
   if (!btn) return;
   const id = Number(btn.getAttribute('data-cal-delete'));
@@ -2466,6 +2605,20 @@ $('panel-calendar')?.addEventListener('click', async (ev) => {
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Calendar delete: ' + e.message);
+  }
+});
+
+$('calendarDayModal')?.addEventListener('click', (ev) => {
+  if (ev.target.closest('[data-cal-modal-close="backdrop"]')) {
+    closeCalendarDayModal();
+  }
+});
+
+$('btnCalendarModalClose')?.addEventListener('click', () => closeCalendarDayModal());
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && $('calendarDayModal') && !$('calendarDayModal').hidden) {
+    closeCalendarDayModal();
   }
 });
 
