@@ -559,14 +559,16 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 export async function classifyIntent(userMessage) {
   const { webSearchEnabled } = getConfig();
   const system = webSearchEnabled
-    ? 'Classify the user message into exactly one word: CHAT, SEARCH, or CALENDAR.\n' +
+    ? 'Classify the user message into exactly one word: CHAT, SEARCH, CALENDAR, or NOTEBOOK.\n' +
       '- CHAT: conversation, advice, coding help, opinions, no live web or schedule needed.\n' +
       '- SEARCH: user needs current/public web information, news, prices, facts from the internet.\n' +
-      '- CALENDAR: scheduling, events, reminders, or asking what is on their schedule.\n' +
+      '- CALENDAR: timed appointments, meetings, reminders on the calendar, or what is on their schedule at a date/time.\n' +
+      '- NOTEBOOK: saving or listing structured personal rows (purchases with price/date, spending log, medicine name + day or schedule, "add to my table/log") — not the same as a calendar event.\n' +
       'Reply with only one word.'
-    : 'Classify the user message into exactly one word: CHAT or CALENDAR.\n' +
+    : 'Classify the user message into exactly one word: CHAT, CALENDAR, or NOTEBOOK.\n' +
       '- CHAT: conversation, advice, coding help, opinions, general knowledge (no live web).\n' +
-      '- CALENDAR: scheduling, events, reminders, or asking what is on their schedule.\n' +
+      '- CALENDAR: timed appointments, meetings, reminders on the calendar, or what is on their schedule at a date/time.\n' +
+      '- NOTEBOOK: saving or listing structured personal rows (purchases with price/date, spending log, medicine + day/schedule, "add to my table/log").\n' +
       'Reply with only one word.';
   const text = await chat(
     [{ role: 'system', content: system }, { role: 'user', content: userMessage.slice(0, 2000) }],
@@ -574,8 +576,39 @@ export async function classifyIntent(userMessage) {
   );
   const u = text.toUpperCase();
   if (webSearchEnabled && u.includes('SEARCH')) return 'SEARCH';
+  if (u.includes('NOTEBOOK')) return 'NOTEBOOK';
   if (u.includes('CALENDAR')) return 'CALENDAR';
   return 'CHAT';
+}
+
+export async function parseUserRecordRequest(userMessage) {
+  const ck = getCalendarClockContext();
+  const raw = await chat(
+    [
+      {
+        role: 'system',
+        content:
+          'You extract structured "notebook" rows from the user message (purchases, medicine log). Reply with JSON only, no markdown.\n' +
+          `Clock (for dates like "today"): local calendar date ${ck.localDateYmd}; timezone ${ck.tz}; local: ${ck.localLong}.\n` +
+          'Schema: {"op":"add"|"list"|"delete","record_type":"purchase"|"medicine"|"other","title":"","occurred_on":"YYYY-MM-DD or empty","amount":null,"currency":"","notes":"","schedule":"","delete_id":null,"list_filter":""}\n' +
+          '- op "add": user wants to save a row. Set record_type: purchase if money/price/bought; medicine if pills/drug/dose; else other.\n' +
+          '- For purchases: set title (item), occurred_on (purchase date; default today if they say "today" or omit), amount + currency (e.g. 2000 THB).\n' +
+          '- For medicine: title = medicine name; occurred_on = a specific day if given, else empty; schedule = free text (e.g. "every morning", "May 3 only"). Put extra free text in notes.\n' +
+          '- op "list": user asks to show/list their saved purchases, medicine log, or table. Set list_filter to "purchase", "medicine", or "" for all.\n' +
+          '- op "delete": user removes a row; set delete_id to the numeric id if they say e.g. "delete #12" or "remove id 5".\n' +
+          '- Use occurred_on as strict YYYY-MM-DD when you can infer the calendar day from the message.',
+      },
+      { role: 'user', content: userMessage.slice(0, 2000) },
+    ],
+    { timeoutMs: 60000, temperature: 0 }
+  );
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    logger.warn(`parseUserRecordRequest JSON fail: ${e.message}`);
+    return { op: 'list', record_type: 'other', title: '', occurred_on: '', list_filter: '' };
+  }
 }
 
 export async function parseCalendarRequest(userMessage) {

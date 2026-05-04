@@ -1,12 +1,20 @@
 import { addEvent, getTodayEvents, getUpcomingEvents } from '../calendar/calendar.js';
-import { resolveEventStartsAt } from '../calendar/resolveStartsAt.js';
+import { resolveEventStartsAt, getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import {
   chat,
   parseCalendarRequest,
+  parseUserRecordRequest,
   summarizeWebContent,
   baseSystemPrompt,
   deterministicRuntimeIdentityReply,
 } from '../llm/ollama.js';
+import {
+  addUserRecord,
+  deleteUserRecordById,
+  formatUserRecordsForPrompt,
+  formatUserRecordsReply,
+  normalizeOccurredOn,
+} from '../records/userRecords.js';
 import { decideIntent } from './intent.js';
 import { formatSoulForPrompt, getSoul, ensureSoul } from '../memory/soul.js';
 import { searchAndSummarize } from '../tools/browser.js';
@@ -52,7 +60,11 @@ function formatEvents(rows) {
 function buildMessages(userId, userText) {
   const soul = getSoul(userId);
   const memoryBlock = formatSoulForPrompt(soul);
-  const system = `${baseSystemPrompt(userId)}\n\n---\nUser memory (Soul ID):\n${memoryBlock}`;
+  const recordsBlock = formatUserRecordsForPrompt(userId, 45);
+  const recordsSection = recordsBlock.startsWith('No structured records')
+    ? recordsBlock
+    : `Structured records (purchases / medicine — quote these for exact dates, prices, and names; do not invent rows):\n${recordsBlock}`;
+  const system = `${baseSystemPrompt(userId)}\n\n---\nUser memory (Soul ID):\n${memoryBlock}\n\n---\n${recordsSection}`;
   return [
     { role: 'system', content: system },
     { role: 'user', content: userText },
@@ -111,6 +123,85 @@ async function handleCalendar(userId, text) {
   }
   const rows = getUpcomingEvents(userId);
   return `Upcoming events:\n${formatEvents(rows)}`;
+}
+
+async function handleNotebook(userId, userText) {
+  const ck = getCalendarClockContext();
+  let parsed;
+  try {
+    parsed = await parseUserRecordRequest(userText);
+  } catch (e) {
+    logger.error(`parseUserRecordRequest: ${e.message}`);
+    return `Could not parse that request: ${e.message}`;
+  }
+  const op = String(parsed.op || 'list').toLowerCase();
+
+  if (op === 'delete') {
+    let id = Number(parsed.delete_id);
+    if (!Number.isFinite(id) || id < 1) {
+      const m = String(userText).match(/\b(?:delete|remove)\s*(?:record\s*)?#?\s*(\d+)\b/i);
+      if (m) id = Number(m[1]);
+    }
+    if (!Number.isFinite(id) || id < 1) {
+      const hint = formatUserRecordsReply(userId, { limit: 15, record_type: null });
+      return `Which row should I remove? Use the id number, e.g. "delete #12".\n\n${hint}`;
+    }
+    const ok = deleteUserRecordById(userId, id);
+    if (!ok) return `No saved row with id ${id} for this user.`;
+    return `Removed saved row #${id}.`;
+  }
+
+  if (op === 'list') {
+    const lf = String(parsed.list_filter || parsed.record_type || '').toLowerCase();
+    const filter = lf === 'purchase' || lf === 'medicine' ? lf : null;
+    return formatUserRecordsReply(userId, {
+      limit: 50,
+      record_type: filter,
+    });
+  }
+
+  if (op === 'add') {
+    const title = String(parsed.title || '').trim();
+    if (!title) {
+      return 'Tell me what to save (item name or medicine name), and for purchases include price and currency if you can.';
+    }
+    let rt = String(parsed.record_type || '').toLowerCase();
+    if (!['purchase', 'medicine', 'other'].includes(rt)) rt = 'other';
+    let occurredOn = normalizeOccurredOn(parsed.occurred_on);
+    if (!occurredOn && rt === 'purchase') occurredOn = ck.localDateYmd;
+    const schedule = String(parsed.schedule || '').trim().slice(0, 500);
+    const notes = String(parsed.notes || '').trim().slice(0, 2000);
+    const meta = schedule ? { schedule } : {};
+    let amount = parsed.amount;
+    if (amount != null && amount !== '') {
+      const n = Number(amount);
+      amount = Number.isFinite(n) ? n : null;
+    } else {
+      amount = null;
+    }
+    const currency = parsed.currency != null ? String(parsed.currency).trim().slice(0, 12) : '';
+    try {
+      const row = addUserRecord(userId, {
+        record_type: rt,
+        title,
+        occurred_on: occurredOn,
+        amount,
+        currency: currency || null,
+        notes,
+        meta,
+      });
+      const price =
+        row.amount != null && Number.isFinite(Number(row.amount))
+          ? ` · ${row.amount}${row.currency ? ' ' + row.currency : ''}`
+          : '';
+      const when = row.occurred_on ? ` · ${row.occurred_on}` : '';
+      return `Saved to your table as #${row.id}: ${row.record_type} "${row.title}"${when}${price}. You can ask anytime (e.g. list my purchases or what medicine is logged).`;
+    } catch (e) {
+      return `Could not save: ${e.message}`;
+    }
+  }
+
+  return formatUserRecordsReply(userId, { limit: 40, record_type: null });
 }
 
 export async function handleTextMessage(userId, text) {
@@ -176,6 +267,16 @@ export async function handleTextMessage(userId, text) {
     } catch (e) {
       logger.error(`Calendar handler error: ${e.message}`);
       return { reply: `Calendar error: ${e.message}` };
+    }
+  }
+
+  if (intent === 'NOTEBOOK') {
+    try {
+      const reply = await handleNotebook(userId, trimmed);
+      return { reply };
+    } catch (e) {
+      logger.error(`Notebook handler error: ${e.message}`);
+      return { reply: `Table save error: ${e.message}` };
     }
   }
 

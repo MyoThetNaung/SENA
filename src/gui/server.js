@@ -9,7 +9,13 @@ import {
   getSettingsPath,
   projectRoot,
 } from '../config.js';
-import { appendChatMessage, listChatMessages, listChatUserIds, listChatSessions } from '../chat/chatLog.js';
+import {
+  appendChatMessage,
+  clearChatMessagesForUser,
+  listChatMessages,
+  listChatUserIds,
+  listChatSessions,
+} from '../chat/chatLog.js';
 import {
   getSoul,
   listSouls,
@@ -22,10 +28,12 @@ import { clearAllStoredMemory } from '../memory/clearAllMemory.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { resetDatabaseConnection, getDb } from '../db.js';
 import { listAllEvents, deleteEventById } from '../calendar/calendar.js';
+import { deleteUserRecordById, listUserRecords } from '../records/userRecords.js';
 import { listAllPending, clearPending } from '../core/pending.js';
 import {
   listTelegramUsers,
   setTelegramUserStatus,
+  setTelegramUserName,
   getTelegramLabelsForUserIds,
   clearTelegramAccessRecords,
   listKnownTelegramBots,
@@ -568,6 +576,21 @@ export function createGuiApp() {
     }
   });
 
+  app.post('/api/chat/clear-session', (req, res) => {
+    try {
+      getDb();
+      const userId = Number((req.body || {}).userId);
+      if (!Number.isFinite(userId)) {
+        res.status(400).json({ ok: false, error: 'Valid userId is required.' });
+        return;
+      }
+      const deleted = clearChatMessagesForUser(userId);
+      res.json({ ok: true, deleted });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get('/api/models', (req, res) => {
     try {
       reloadConfig();
@@ -595,6 +618,12 @@ export function createGuiApp() {
       const db = getDb();
       const chatCount = db.prepare('SELECT COUNT(*) as c FROM chat_log').get().c;
       const eventsCount = db.prepare('SELECT COUNT(*) as c FROM events').get().c;
+      let recordsCount = 0;
+      try {
+        recordsCount = db.prepare('SELECT COUNT(*) as c FROM user_records').get().c;
+      } catch {
+        /* table missing before migrate */
+      }
       const soulsCount = db.prepare('SELECT COUNT(*) as c FROM soul').get().c;
       const pendingCount = db.prepare('SELECT COUNT(*) as c FROM pending_confirm').get().c;
       let accessPending = 0;
@@ -603,7 +632,7 @@ export function createGuiApp() {
       } catch {
         /* table missing before migrate */
       }
-      res.json({ chatCount, eventsCount, soulsCount, pendingCount, accessPending });
+      res.json({ chatCount, eventsCount, recordsCount, soulsCount, pendingCount, accessPending });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -637,16 +666,22 @@ export function createGuiApp() {
       const b = req.body || {};
       const userId = Number(b.userId);
       const status = String(b.status || '').toLowerCase();
+      const hasUsername = Object.prototype.hasOwnProperty.call(b, 'username');
       if (!Number.isFinite(userId)) {
         res.status(400).json({ ok: false, error: 'Invalid userId' });
         return;
       }
-      if (!['approved', 'blocked', 'pending'].includes(status)) {
+      if (status && !['approved', 'blocked', 'pending'].includes(status)) {
         res.status(400).json({ ok: false, error: 'status must be approved, blocked, or pending' });
         return;
       }
+      if (!status && !hasUsername) {
+        res.status(400).json({ ok: false, error: 'No updates provided' });
+        return;
+      }
       getDb();
-      setTelegramUserStatus(userId, status);
+      if (status) setTelegramUserStatus(userId, status);
+      if (hasUsername) setTelegramUserName(userId, b.username);
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
@@ -796,7 +831,7 @@ export function createGuiApp() {
       }
       getDb();
       clearAllStoredMemory();
-      logger.warn('clear-all-memory: wiped pending_confirm, chat_log, soul (events CASCADE)');
+      logger.warn('clear-all-memory: wiped pending_confirm, chat_log, soul (events & user_records CASCADE)');
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -852,6 +887,48 @@ export function createGuiApp() {
       const ok = deleteEventById(id);
       if (!ok) {
         res.status(404).json({ ok: false, error: 'No event with that id.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/data/records', (req, res) => {
+    try {
+      getDb();
+      const userId = Number(req.query.userId);
+      if (!Number.isFinite(userId)) {
+        res.status(400).json({ error: 'Query userId is required.' });
+        return;
+      }
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+      const rt = String(req.query.recordType || '').toLowerCase();
+      const filter = rt === 'purchase' || rt === 'medicine' ? rt : null;
+      const rows = listUserRecords(userId, { limit, record_type: filter });
+      res.json({ records: rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/data/records/delete', (req, res) => {
+    try {
+      getDb();
+      const userId = Number((req.body || {}).userId);
+      const id = Number((req.body || {}).id);
+      if (!Number.isFinite(userId)) {
+        res.status(400).json({ ok: false, error: 'Valid userId is required.' });
+        return;
+      }
+      if (!Number.isFinite(id) || id < 1) {
+        res.status(400).json({ ok: false, error: 'Valid record id is required.' });
+        return;
+      }
+      const ok = deleteUserRecordById(userId, id);
+      if (!ok) {
+        res.status(404).json({ ok: false, error: 'No record with that id for this user.' });
         return;
       }
       res.json({ ok: true });

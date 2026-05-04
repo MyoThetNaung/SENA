@@ -82,3 +82,12 @@ export function listChatSessions() {
     lastAt: r.last_at != null ? sqliteUtcStringToIsoZ(r.last_at) : r.last_at,
   }));
 }
+
+/** Remove all chat rows for one session user id. */
+export function clearChatMessagesForUser(userId) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) throw new Error('Invalid userId');
+  const db = getDb();
+  const out = db.prepare('DELETE FROM chat_log WHERE user_id = ?').run(uid);
+  return Number(out.changes || 0);
+}

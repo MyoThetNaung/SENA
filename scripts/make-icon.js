@@ -2,23 +2,35 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import pngToIco from 'png-to-ico';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 
+const sourcePngPath = path.join(projectRoot, 'resources', 'SENA LOGO.png');
 const sourceIcoPath = path.join(projectRoot, 'resources', 'SENA LOGO.ico');
 const buildDir = path.join(projectRoot, 'build');
 const icoPath = path.join(buildDir, 'icon.ico');
 
 async function main() {
-  if (!fs.existsSync(sourceIcoPath)) {
-    throw new Error(`Icon source missing: ${sourceIcoPath}`);
-  }
-
   fs.mkdirSync(buildDir, { recursive: true });
-  fs.copyFileSync(sourceIcoPath, icoPath);
-  console.log(`[icon] Generated ${icoPath}`);
+  if (fs.existsSync(sourcePngPath)) {
+    try {
+      const icoBuffer = await pngToIco(sourcePngPath);
+      fs.writeFileSync(icoPath, icoBuffer);
+      console.log(`[icon] Generated ${icoPath} from ${sourcePngPath}`);
+      return;
+    } catch (e) {
+      console.warn(`[icon] PNG to ICO failed (${e.message}); trying fallback ICO source.`);
+    }
+  }
+  if (fs.existsSync(sourceIcoPath)) {
+    fs.copyFileSync(sourceIcoPath, icoPath);
+    console.log(`[icon] Copied ${icoPath} from ${sourceIcoPath}`);
+    return;
+  }
+  throw new Error(`Icon source missing: ${sourcePngPath} (or fallback ${sourceIcoPath})`);
 }
 
 main().catch((error) => {

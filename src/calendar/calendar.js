@@ -1,5 +1,6 @@
 import { getDb } from '../db.js';
 import { ensureSoul } from '../memory/soul.js';
+import { getTelegramLabelsForUserIds } from '../access/telegramAccess.js';
 
 export function addEvent(userId, startsAtIso, title) {
   ensureSoul(userId);
@@ -33,13 +34,18 @@ export function getTodayEvents(userId) {
 export function listAllEvents(limit = 300) {
   const db = getDb();
   const lim = Math.min(2000, Math.max(1, Number(limit) || 300));
-  return db
+  const rows = db
     .prepare(
       `SELECT id, user_id, starts_at, title, created_at FROM events
        ORDER BY starts_at DESC
        LIMIT ?`
     )
     .all(lim);
+  const labels = getTelegramLabelsForUserIds(rows.map((r) => Number(r.user_id)));
+  return rows.map((r) => ({
+    ...r,
+    user_name: labels.get(Number(r.user_id)) || String(r.user_id),
+  }));
 }
 
 /** @returns {boolean} true if a row was removed */

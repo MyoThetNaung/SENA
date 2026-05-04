@@ -39,6 +39,61 @@ export function setTelegramUserStatus(userId, status) {
     `INSERT INTO telegram_users (user_id, status, last_seen) VALUES (?, ?, datetime('now'))
      ON CONFLICT(user_id) DO UPDATE SET status = excluded.status, last_seen = datetime('now')`
   ).run(userId, s);
+  syncDisplayNameToSoul(userId);
+}
+
+export function syncDisplayNameToSoul(userId) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) return;
+  const db = getDb();
+  let name = null;
+  if (uid >= SCOPED_USER_ID_OFFSET) {
+    const row = db
+      .prepare('SELECT username FROM telegram_identity_map WHERE id = ?')
+      .get(uid - SCOPED_USER_ID_OFFSET);
+    name = row?.username || null;
+  } else {
+    const row = db.prepare('SELECT username FROM telegram_users WHERE user_id = ?').get(uid);
+    name = row?.username || null;
+  }
+  db.prepare(
+    `INSERT INTO soul (user_id, display_name, preferences, facts)
+     VALUES (?, ?, '{}', '[]')
+     ON CONFLICT(user_id) DO UPDATE SET
+       display_name = excluded.display_name,
+       updated_at = datetime('now')`
+  ).run(uid, name);
+}
+
+export function setTelegramUserName(userId, username) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) throw new Error('Invalid userId');
+  const name = String(username ?? '').trim();
+  const display = name || null;
+  const db = getDb();
+  if (uid >= SCOPED_USER_ID_OFFSET) {
+    const localMapId = uid - SCOPED_USER_ID_OFFSET;
+    db.prepare(
+      `UPDATE telegram_identity_map
+       SET username = ?, last_seen = datetime('now')
+       WHERE id = ?`
+    ).run(name || null, localMapId);
+  } else {
+    db.prepare(
+      `INSERT INTO telegram_users (user_id, status, username, last_seen)
+       VALUES (?, 'pending', ?, datetime('now'))
+       ON CONFLICT(user_id) DO UPDATE SET
+         username = excluded.username,
+         last_seen = datetime('now')`
+    ).run(uid, name || null);
+  }
+  db.prepare(
+    `INSERT INTO soul (user_id, display_name, preferences, facts)
+     VALUES (?, ?, '{}', '[]')
+     ON CONFLICT(user_id) DO UPDATE SET
+       display_name = excluded.display_name,
+       updated_at = datetime('now')`
+  ).run(uid, display);
 }
 
 /**
@@ -82,14 +137,62 @@ export function getTelegramLabelsForUserIds(userIds) {
   const ids = (userIds || []).map(Number).filter((n) => Number.isFinite(n));
   if (!ids.length) return new Map();
   const db = getDb();
-  const ph = ids.map(() => '?').join(',');
-  const rows = db
-    .prepare(`SELECT user_id, username, first_name FROM telegram_users WHERE user_id IN (${ph})`)
-    .all(...ids);
   const m = new Map();
-  for (const r of rows) {
-    const label = r.username ? `@${r.username}` : r.first_name || String(r.user_id);
-    m.set(r.user_id, label);
+
+  const directIds = ids.filter((id) => id < SCOPED_USER_ID_OFFSET);
+  if (directIds.length) {
+    const ph = directIds.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT t.user_id, t.username, t.first_name, s.display_name
+         FROM telegram_users t
+         LEFT JOIN soul s ON s.user_id = t.user_id
+         WHERE t.user_id IN (${ph})`
+      )
+      .all(...directIds);
+    for (const r of rows) {
+      const label =
+        String(r.display_name || '').trim() ||
+        String(r.username || '').trim() ||
+        String(r.first_name || '').trim() ||
+        String(r.user_id);
+      m.set(Number(r.user_id), label);
+    }
+  }
+
+  const scopedIds = ids.filter((id) => id >= SCOPED_USER_ID_OFFSET);
+  if (scopedIds.length) {
+    const mapIds = scopedIds
+      .map((uid) => ({ uid, mapId: uid - SCOPED_USER_ID_OFFSET }))
+      .filter((x) => Number.isFinite(x.mapId) && x.mapId >= 1);
+    if (mapIds.length) {
+      const ph = mapIds.map(() => '?').join(',');
+      const rows = db
+        .prepare(
+          `SELECT i.id, i.username, i.first_name, s.display_name
+           FROM telegram_identity_map i
+           LEFT JOIN soul s ON s.user_id = (? + i.id)
+           WHERE i.id IN (${ph})`
+        )
+        .all(SCOPED_USER_ID_OFFSET, ...mapIds.map((x) => x.mapId));
+      const byMapId = new Map(rows.map((r) => [Number(r.id), r]));
+      for (const item of mapIds) {
+        const r = byMapId.get(Number(item.mapId));
+        if (!r) continue;
+        const label =
+          String(r.display_name || '').trim() ||
+          String(r.username || '').trim() ||
+          String(r.first_name || '').trim() ||
+          String(item.uid);
+        m.set(Number(item.uid), label);
+      }
+    }
+  }
+
+  for (const uid of ids) {
+    if (!m.has(uid)) {
+      m.set(uid, String(uid));
+    }
   }
   return m;
 }
@@ -123,15 +226,20 @@ export function listTelegramUsers(filterStatus = null) {
   if (filterStatus && ['pending', 'approved', 'blocked'].includes(filterStatus)) {
     return db
       .prepare(
-        `SELECT user_id, status, username, first_name, first_message_preview, created_at, last_seen
-         FROM telegram_users WHERE status = ? ORDER BY datetime(created_at) DESC`
+        `SELECT t.user_id, t.status, t.username, t.first_name, t.first_message_preview, t.created_at, t.last_seen, s.display_name
+         FROM telegram_users t
+         LEFT JOIN soul s ON s.user_id = t.user_id
+         WHERE t.status = ?
+         ORDER BY datetime(t.created_at) DESC`
       )
       .all(filterStatus);
   }
   return db
     .prepare(
-      `SELECT user_id, status, username, first_name, first_message_preview, created_at, last_seen
-       FROM telegram_users ORDER BY datetime(last_seen) DESC`
+      `SELECT t.user_id, t.status, t.username, t.first_name, t.first_message_preview, t.created_at, t.last_seen, s.display_name
+       FROM telegram_users t
+       LEFT JOIN soul s ON s.user_id = t.user_id
+       ORDER BY datetime(t.last_seen) DESC`
     )
     .all();
 }

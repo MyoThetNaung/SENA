@@ -23,6 +23,15 @@ export function keywordIntentHint(text) {
   ) {
     return 'SEARCH';
   }
+  if (
+    /\b(add|save|log|record|put)\b.+\b(in\s+(the\s+)?table|to\s+(my\s+)?(table|log))\b/.test(t) ||
+    /\b(medicine|medication|pill|tablet|dose)\b.+\b(log|schedule|table|record)\b/.test(t) ||
+    /\b(purchase|bought|paid|spend|spending|price|thb|baht)\b.+\b(log|table|record)\b/.test(t) ||
+    /\b(my\s+)?(purchases|spending)\s+(log|list|table)\b/.test(t) ||
+    /\b(list|show)\b.+\b(saved|my)\b.+\b(purchases|medicine|medications|table|rows)\b/.test(t)
+  ) {
+    return 'NOTEBOOK';
+  }
   return null;
 }
 

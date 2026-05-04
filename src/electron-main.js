@@ -11,6 +11,7 @@ import { closeBrowser } from './tools/browser.js';
 
 let win = null;
 app.setName('SENA');
+app.setAppUserModelId('com.sena.assistant');
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -30,6 +31,7 @@ async function shutdown(reason = 'exit') {
 }
 
 function createWindow(url) {
+  const devIconPath = path.resolve(__dirname, '../build/icon.ico');
   win = new BrowserWindow({
     width: 1580,
     height: 1020,
@@ -44,6 +46,7 @@ function createWindow(url) {
       symbolColor: '#dbe9ff',
       height: 34,
     },
+    icon: fs.existsSync(devIconPath) ? devIconPath : undefined,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

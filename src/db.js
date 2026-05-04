@@ -113,21 +113,22 @@ function migrate(db) {
       duration_ms INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_llm_usage_day ON llm_usage(day_key);
-  `);
-  seedTelegramUsersFromSoul(db);
-}
 
-function seedTelegramUsersFromSoul(db) {
-  try {
-    const souls = db.prepare('SELECT user_id FROM soul').all();
-    const ins = db.prepare(
-      `INSERT OR IGNORE INTO telegram_users (user_id, status, last_seen, created_at)
-       VALUES (?, 'approved', datetime('now'), datetime('now'))`
+    CREATE TABLE IF NOT EXISTS user_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      record_type TEXT NOT NULL,
+      occurred_on TEXT,
+      title TEXT NOT NULL,
+      amount REAL,
+      currency TEXT,
+      notes TEXT NOT NULL DEFAULT '',
+      meta TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES soul(user_id) ON DELETE CASCADE
     );
-    for (const { user_id } of souls) {
-      ins.run(user_id);
-    }
-  } catch {
-    /* ignore */
-  }
+    CREATE INDEX IF NOT EXISTS idx_user_records_user ON user_records(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_records_user_type ON user_records(user_id, record_type);
+    CREATE INDEX IF NOT EXISTS idx_user_records_occurred ON user_records(user_id, occurred_on);
+  `);
 }

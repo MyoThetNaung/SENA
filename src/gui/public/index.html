@@ -834,6 +834,31 @@
             </div>
           </div>
 
+          <div class="card mem-records-card">
+            <h2>Saved table rows (this session)</h2>
+            <p class="hint">
+              Structured rows (purchases with date/price, medicine + schedule). In chat say e.g. “add to my table: wallet May 2
+              2000 THB” or “list my medicine log”.
+            </p>
+            <button type="button" id="btnRefreshRecordsMem" class="primary ghost">Refresh table</button>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Id</th>
+                    <th>Type</th>
+                    <th>Date</th>
+                    <th>Title</th>
+                    <th>Amount</th>
+                    <th>Notes / schedule</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="recordsMemBody"></tbody>
+              </table>
+            </div>
+          </div>
+
           <div class="card mem-danger-card">
             <h2>Reset all stored memory</h2>
             <button type="button" id="btnClearAllMemory" class="danger wide">Clear ALL memory (whole database)</button>
@@ -897,6 +922,7 @@
                 <option value="500">500</option>
               </select>
               <button type="button" id="btnRefreshChat" class="primary ghost">Refresh</button>
+              <button type="button" id="btnClearChatSession" class="danger ghost">Clear Session Chat</button>
             </div>
             <p class="hint chat-session-hint" id="chatSessionHint"></p>
             <!-- Chat shell layout from Uiverse.io (reglobby); colors match app glass theme -->

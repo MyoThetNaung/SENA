@@ -1,7 +1,7 @@
 import { getDb } from '../db.js';
 
 /**
- * Wipes all user memory and local chat history: pending_confirm, chat_log, soul (events CASCADE).
+ * Wipes all user memory and local chat history: pending_confirm, chat_log, soul (events + user_records CASCADE).
  * Does not touch telegram_users (access list) or settings.
  */
 export function clearAllStoredMemory() {

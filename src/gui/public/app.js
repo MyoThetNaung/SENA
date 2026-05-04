@@ -80,6 +80,7 @@ function initWindowControls() {
 let lastConsoleStatusSignature = '';
 let lastGuiConsoleUserId = 900000001;
 const OVERVIEW_CHAT_LIMIT = '50';
+let chatSendInFlight = false;
 
 async function refreshConsoleStatusLine() {
   try {
@@ -1323,49 +1324,150 @@ async function loadAccess() {
   const pend = users.filter((u) => u.status === 'pending');
   $('accessPendingBody').innerHTML = pend.length
     ? pend
-        .map(
-          (u) =>
-            `<tr><td>${u.user_id}</td><td>${escapeHtml(u.username || '')}</td><td>${escapeHtml(
-              u.first_name || ''
-            )}</td><td class="msg">${escapeHtml(u.first_message_preview || '')}</td><td>${escapeHtml(
-              u.created_at || ''
-            )}</td><td class="nowrap"><button type="button" class="btn-mini success" data-access-act="approved" data-uid="${
-              u.user_id
-            }">Approve</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
-              u.user_id
-            }">Deny</button></td></tr>`
-        )
+        .map((u) => {
+          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
+          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td>${escapeHtml(
+            u.first_name || ''
+          )}</td><td class="msg">${escapeHtml(u.first_message_preview || '')}</td><td>${escapeHtml(
+            u.created_at || ''
+          )}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
+            u.user_id
+          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini success" data-access-act="approved" data-uid="${
+            u.user_id
+          }">Approve</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
+            u.user_id
+          }">Deny</button></td></tr>`;
+        })
         .join('')
     : '<tr><td colspan="6" class="hint">No pending users.</td></tr>';
 
   const appr = users.filter((u) => u.status === 'approved');
   $('accessApprovedBody').innerHTML = appr.length
     ? appr
-        .map(
-          (u) =>
-            `<tr><td>${u.user_id}</td><td>${escapeHtml(u.username || '')}</td><td>${escapeHtml(
-              u.last_seen || ''
-            )}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-act="pending" data-uid="${
-              u.user_id
-            }">Revoke</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
-              u.user_id
-            }">Block</button></td></tr>`
-        )
+        .map((u) => {
+          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
+          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td>${escapeHtml(
+            u.last_seen || ''
+          )}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
+            u.user_id
+          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini ghost" data-access-act="pending" data-uid="${
+            u.user_id
+          }">Revoke</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
+            u.user_id
+          }">Block</button></td></tr>`;
+        })
         .join('')
     : '<tr><td colspan="4" class="hint">None yet.</td></tr>';
 
   const blk = users.filter((u) => u.status === 'blocked');
   $('accessBlockedBody').innerHTML = blk.length
     ? blk
-        .map(
-          (u) =>
-            `<tr><td>${u.user_id}</td><td>${escapeHtml(u.username || '')}</td><td class="nowrap"><button type="button" class="btn-mini success" data-access-act="approved" data-uid="${u.user_id}">Approve</button></td></tr>`
-        )
+        .map((u) => {
+          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
+          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
+            u.user_id
+          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini success" data-access-act="approved" data-uid="${
+            u.user_id
+          }">Approve</button></td></tr>`;
+        })
         .join('')
     : '<tr><td colspan="3" class="hint">None.</td></tr>';
 }
 
+let accessNameModalResolve = null;
+
+function ensureAccessNameModal() {
+  let modal = $('accessNameModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'accessNameModal';
+  modal.hidden = true;
+  modal.innerHTML = `<div data-access-name-backdrop style="position:fixed;inset:0;background:rgba(2,6,23,.62);z-index:2000;display:flex;align-items:center;justify-content:center;padding:16px;">
+    <div data-access-name-panel style="width:min(460px,100%);background:#0b1220;border:1px solid rgba(96,165,250,.38);border-radius:12px;padding:14px;">
+      <div style="font-weight:600;margin-bottom:10px;">Edit user name</div>
+      <input id="accessNameInput" class="input" type="text" placeholder="User name" style="width:100%;" />
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button type="button" id="btnAccessNameCancel" class="btn-mini ghost">Cancel</button>
+        <button type="button" id="btnAccessNameConfirm" class="btn-mini success">Confirm</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+  const close = (value) => {
+    modal.hidden = true;
+    const resolver = accessNameModalResolve;
+    accessNameModalResolve = null;
+    if (resolver) resolver(value);
+  };
+  modal.querySelector('[data-access-name-backdrop]')?.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-access-name-panel]')) return;
+    close(null);
+  });
+  modal.querySelector('#btnAccessNameCancel')?.addEventListener('click', () => close(null));
+  modal.querySelector('#btnAccessNameConfirm')?.addEventListener('click', () => {
+    const inp = modal.querySelector('#accessNameInput');
+    close(String(inp?.value || '').trim());
+  });
+  modal.querySelector('#accessNameInput')?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const inp = modal.querySelector('#accessNameInput');
+      close(String(inp?.value || '').trim());
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      close(null);
+    }
+  });
+  return modal;
+}
+
+function openAccessNameModal(currentName) {
+  const modal = ensureAccessNameModal();
+  const inp = modal.querySelector('#accessNameInput');
+  if (inp) {
+    inp.value = String(currentName || '');
+  }
+  modal.hidden = false;
+  setTimeout(() => {
+    if (!inp) return;
+    inp.focus();
+    inp.select();
+  }, 0);
+  return new Promise((resolve) => {
+    accessNameModalResolve = resolve;
+  });
+}
+
 document.addEventListener('click', async (ev) => {
+  const nameBtn = ev.target.closest('[data-access-name-edit]');
+  if (nameBtn) {
+    const uid = Number(nameBtn.getAttribute('data-access-name-edit'));
+    if (!Number.isFinite(uid)) return;
+    const current = String(nameBtn.getAttribute('data-access-current-name') || '').trim();
+    const usernameNext = await openAccessNameModal(current);
+    if (usernameNext == null) return;
+    const username = String(usernameNext).trim();
+    try {
+      const r = await fetch('/api/access/set', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: uid, username }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Name update failed');
+      logLine(`Access name updated for ${uid}`);
+      await loadAccess();
+      await loadChat().catch(() => {});
+      await loadCalendar().catch(() => {});
+      await loadMemorySessionsIntoSelects().catch(() => {});
+      await loadSoulForCurrentMemSession().catch(() => {});
+      await loadSouls().catch(() => {});
+    } catch (e) {
+      setStatus(e.message, 'err');
+      logLine('Access name: ' + e.message);
+    }
+    return;
+  }
   const btn = ev.target.closest('[data-access-act]');
   if (!btn) return;
   const uid = Number(btn.dataset.uid);
@@ -1379,9 +1481,14 @@ document.addEventListener('click', async (ev) => {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Update failed');
-    logLine(`Access ${uid} → ${status}`);
-    await loadAccess();
-    await loadOverview();
+logLine(`Access ${uid} → ${status}`);
+      await loadAccess();
+      await loadOverview();
+      await loadChat().catch(() => {});
+      await loadCalendar().catch(() => {});
+      await loadMemorySessionsIntoSelects().catch(() => {});
+      await loadSoulForCurrentMemSession().catch(() => {});
+      await loadSouls().catch(() => {});
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Access: ' + e.message);
@@ -1696,16 +1803,16 @@ async function loadMemorySessionsIntoSelects() {
   for (const s of sessions) {
     const o = document.createElement('option');
     o.value = String(s.userId);
-    o.textContent = `${s.label} · ${s.userId}`;
+    o.textContent = `${s.label}`;
     memSel.appendChild(o);
     const c = document.createElement('option');
     c.value = String(s.userId);
-    c.textContent = `${s.label} · ${s.userId}`;
+    c.textContent = `${s.label}`;
     copySel.appendChild(c);
     if (copyBotSel) {
       const b = document.createElement('option');
       b.value = String(s.userId);
-      b.textContent = `${s.label} · ${s.userId}`;
+      b.textContent = `${s.label}`;
       copyBotSel.appendChild(b);
     }
   }
@@ -1746,6 +1853,7 @@ async function loadSoulForCurrentMemSession() {
     if ($('memAge')) $('memAge').value = '';
     if ($('memExtra')) $('memExtra').value = '';
     if ($('memMemorySummary')) $('memMemorySummary').value = '';
+    renderRecordsMemTable([]);
     return;
   }
   const r = await fetch(`/api/soul/${uid}`);
@@ -1753,6 +1861,57 @@ async function loadSoulForCurrentMemSession() {
   if (soul.error) throw new Error(soul.error);
   applySoulToMemForm(soul);
   applyBotPersonaFieldsToForm(mergeBotPersonaForMemForm(soul));
+  await loadRecordsMemTable().catch(() => {});
+}
+
+function recordMetaSchedulePreview(metaRaw) {
+  try {
+    const o = typeof metaRaw === 'string' ? JSON.parse(metaRaw) : metaRaw;
+    if (o && typeof o.schedule === 'string' && o.schedule.trim()) return o.schedule.trim();
+  } catch {
+    /* ignore */
+  }
+  return '';
+}
+
+function renderRecordsMemTable(rows) {
+  const tbody = $('recordsMemBody');
+  if (!tbody) return;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="hint">No saved rows for this session.</td></tr>';
+    return;
+  }
+  const parts = [];
+  for (const rec of rows) {
+    const sched = recordMetaSchedulePreview(rec.meta);
+    const notes = [sched, rec.notes || ''].filter(Boolean).join(sched && rec.notes ? ' · ' : '');
+    const amtDisp =
+      rec.amount != null && Number.isFinite(Number(rec.amount))
+        ? escapeHtml(String(rec.amount) + (rec.currency ? ` ${rec.currency}` : ''))
+        : '—';
+    parts.push(
+      `<tr><td>${rec.id}</td><td>${escapeHtml(rec.record_type || '')}</td><td>${escapeHtml(
+        rec.occurred_on || '—'
+      )}</td><td>${escapeHtml(rec.title || '')}</td><td>${amtDisp}</td><td>${escapeHtml(
+        notes || '—'
+      )}</td><td><button type="button" class="danger ghost btn-delete-record-mem" data-record-id="${rec.id}">Delete</button></td></tr>`
+    );
+  }
+  tbody.innerHTML = parts.join('');
+}
+
+async function loadRecordsMemTable() {
+  const uid = Number($('memSessionSelect')?.value);
+  const tbody = $('recordsMemBody');
+  if (!tbody) return;
+  if (!Number.isFinite(uid)) {
+    renderRecordsMemTable([]);
+    return;
+  }
+  const r = await fetch(`/api/data/records?userId=${encodeURIComponent(uid)}&limit=200`);
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+  renderRecordsMemTable(Array.isArray(data.records) ? data.records : []);
 }
 
 async function loadDataTab() {
@@ -1787,7 +1946,7 @@ function updateChatSessionHint(selectEl) {
   if (!selectEl) return;
   const uid = Number(selectEl.value);
   const opt = selectEl.selectedOptions[0];
-  const text = `Active user id: ${uid} — ${opt ? opt.textContent : ''}`;
+  const text = `Active user: ${opt ? opt.textContent : uid}`;
   const hintIds = ['chatSessionHint'];
   for (const id of hintIds) {
     const hintEl = $(id);
@@ -1810,7 +1969,7 @@ function buildSessionSelect(sessionsPayload) {
   for (const s of sessions) {
     const o = document.createElement('option');
     o.value = String(s.userId);
-    o.textContent = `${s.label} · ${s.userId}`;
+    o.textContent = `${s.label}`;
     sel.appendChild(o);
   }
   const saved = localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
@@ -1886,6 +2045,7 @@ async function loadChat(opts = {}) {
 }
 
 async function sendChatFromGui() {
+  if (chatSendInFlight) return;
   const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
   const input = getActiveChatInputEl();
   const text = (input?.value || '').trim();
@@ -1895,8 +2055,10 @@ async function sendChatFromGui() {
     setStatus('Chat session is unavailable.', 'err');
     return;
   }
+  chatSendInFlight = true;
+  input.value = '';
+  input.focus();
   setStatus('Sending…', '');
-  input.disabled = true;
   try {
     const r = await fetch('/api/chat/send', {
       method: 'POST',
@@ -1914,10 +2076,43 @@ async function sendChatFromGui() {
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Chat: ' + e.message);
+    if (!input.value) input.value = text;
     await loadChat({ forceBottom: true }).catch(() => {});
   } finally {
-    input.disabled = false;
+    chatSendInFlight = false;
     input.focus();
+  }
+}
+
+async function clearChatDataBySessionWithDoubleConfirmation() {
+  const uid = Number(getActiveChatSelect()?.value);
+  if (!Number.isFinite(uid)) {
+    setStatus('Pick a valid chat session first.', 'err');
+    return;
+  }
+  const ok1 = window.confirm(
+    `Clear all chat messages for this session?\n\nThis affects the selected session only.`
+  );
+  if (!ok1) return;
+  const ok2 = window.confirm(
+    `Second confirmation: permanently delete chat history for session ${uid}?\n\nThis cannot be undone.`
+  );
+  if (!ok2) return;
+  setStatus('Clearing session chat…', '');
+  try {
+    const r = await fetch('/api/chat/clear-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: uid }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Clear failed');
+    logLine(`Cleared ${Number(j.deleted || 0)} chat row(s) for session ${uid}.`);
+    setStatus('Session chat cleared.', 'ok');
+    await loadChat({ forceBottom: true });
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Clear session chat: ' + e.message);
   }
 }
 
@@ -1949,14 +2144,12 @@ function openCalendarDayModal(dayDate, events) {
   title.textContent = `Events on ${dayDate.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}`;
   body.innerHTML = events
     .map((e) => {
-      const id = Number(e.id);
       const userId = Number(e.user_id);
       const createdAt = e.created_at ? formatEventDateTime(e.created_at) : '—';
       return `<article class="calendar-modal-event">
         <p><strong>Title:</strong> ${escapeHtml(e.title || '')}</p>
         <p><strong>Starts:</strong> ${escapeHtml(formatEventDateTime(e.starts_at))}</p>
-        <p><strong>User ID:</strong> ${escapeHtml(Number.isFinite(userId) ? String(userId) : String(e.user_id || ''))}</p>
-        <p><strong>Event ID:</strong> ${escapeHtml(Number.isFinite(id) ? String(id) : String(e.id || ''))}</p>
+        <p><strong>User:</strong> ${escapeHtml(String(e.user_name || e.username || e.display_name || (Number.isFinite(userId) ? String(userId) : String(e.user_id || ''))))}</p>
         <p><strong>Created:</strong> ${escapeHtml(createdAt)}</p>
       </article>`;
     })
@@ -2364,6 +2557,30 @@ if ($('btnCopyBotPersona')) {
 }
 
 $('panel-data')?.addEventListener('click', (ev) => {
+  const delRec = ev.target.closest('.btn-delete-record-mem');
+  if (delRec) {
+    const id = Number(delRec.getAttribute('data-record-id'));
+    const uid = Number($('memSessionSelect')?.value);
+    if (!Number.isFinite(id) || !Number.isFinite(uid)) return;
+    if (!confirm(`Delete saved table row #${id}?`)) return;
+    (async () => {
+      setStatus('Deleting row…', '');
+      try {
+        const r = await fetch('/api/data/records/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: uid, id }),
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || 'Delete failed');
+        setStatus('Row deleted.', 'ok');
+        await loadRecordsMemTable();
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    })();
+    return;
+  }
   const editBtn = ev.target.closest('[data-mem-bot-edit]');
   if (editBtn) {
     ev.preventDefault();
@@ -2435,6 +2652,11 @@ if ($('memSessionSelect')) {
     loadSoulForCurrentMemSession().catch((e) => setStatus(e.message, 'err'));
   });
 }
+if ($('btnRefreshRecordsMem')) {
+  $('btnRefreshRecordsMem').addEventListener('click', () => {
+    loadRecordsMemTable().catch((e) => setStatus(e.message, 'err'));
+  });
+}
 if ($('btnSaveMemSession')) {
   $('btnSaveMemSession').addEventListener('click', async () => {
     const uid = Number($('memSessionSelect')?.value);
@@ -2467,6 +2689,8 @@ if ($('btnSaveMemSession')) {
       logLine(`Session memory saved for user ${uid}.`);
       setStatus('Session memory saved.', 'ok');
       await loadSouls();
+      await loadMemorySessionsIntoSelects();
+      await loadChat().catch(() => {});
     } catch (e) {
       setStatus(e.message, 'err');
       logLine('Session memory: ' + e.message);
@@ -2503,7 +2727,7 @@ if ($('btnClearMemSession')) {
 if ($('btnClearAllMemory')) {
   $('btnClearAllMemory').addEventListener('click', async () => {
     const typed = prompt(
-      'This deletes ALL souls, ALL chat history, ALL pending actions, and ALL calendar events.\n\nType DELETE ALL to confirm:'
+      'This deletes ALL souls, ALL chat history, ALL pending actions, ALL calendar events, and ALL saved table rows (purchases/medicine).\n\nType DELETE ALL to confirm:'
     );
     if (typed !== 'DELETE ALL') {
       if (typed != null) setStatus('Cancelled.', '');
@@ -2647,10 +2871,14 @@ $('panel-pending')?.addEventListener('click', async (ev) => {
 });
 $('btnRefreshAccess').addEventListener('click', () => loadAccess().catch((e) => setStatus(e.message, 'err')));
 $('btnClearAccessAll')?.addEventListener('click', async () => {
-  const ok = window.confirm(
+  const ok1 = window.confirm(
     'Clear all access data?\n\nThis removes all pending, approved, and blocked Telegram access records. New messages will create fresh pending requests.'
   );
-  if (!ok) return;
+  if (!ok1) return;
+  const ok2 = window.confirm(
+    'Second confirmation: clear ALL access records now?\n\nThis cannot be undone.'
+  );
+  if (!ok2) return;
   setStatus('Clearing access data…', '');
   try {
     const r = await fetch('/api/access/clear-all', { method: 'POST' });
@@ -2694,6 +2922,10 @@ for (const id of ['chatInput', 'overviewChatInput']) {
 for (const id of ['btnRefreshChat']) {
   $(id)?.addEventListener('click', () => loadChat().catch((e) => setStatus(e.message, 'err')));
 }
+
+$('btnClearChatSession')?.addEventListener('click', () => {
+  clearChatDataBySessionWithDoubleConfirmation().catch((e) => setStatus(e.message, 'err'));
+});
 function routeHash() {
   let h = (location.hash || '#overview').slice(1) || 'overview';
   if (h === 'chart') {
