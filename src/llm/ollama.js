@@ -563,12 +563,14 @@ export async function classifyIntent(userMessage) {
       '- CHAT: conversation, advice, coding help, opinions, no live web or schedule needed.\n' +
       '- SEARCH: user needs current/public web information, news, prices, facts from the internet.\n' +
       '- CALENDAR: timed appointments, meetings, reminders on the calendar, or what is on their schedule at a date/time.\n' +
-      '- NOTEBOOK: saving or listing structured personal rows (purchases with price/date, spending log, medicine name + day or schedule, "add to my table/log") — not the same as a calendar event.\n' +
+      '- NOTEBOOK: ADD one row, DELETE a row, EXPLICIT full-table list, or a multi-line pasted buying/inventory list to record.\n' +
+      '- CHAT: also for questions about a single saved item (when did I buy X, how much was Y, rent due date) — answer from memory, not a full-table dump.\n' +
+      '- NOTEBOOK is NOT for one-off factual questions about purchases or medicine.\n' +
       'Reply with only one word.'
     : 'Classify the user message into exactly one word: CHAT, CALENDAR, or NOTEBOOK.\n' +
-      '- CHAT: conversation, advice, coding help, opinions, general knowledge (no live web).\n' +
+      '- CHAT: conversation, advice, coding help, opinions, general knowledge (no live web), and questions about one specific saved purchase/medicine row.\n' +
       '- CALENDAR: timed appointments, meetings, reminders on the calendar, or what is on their schedule at a date/time.\n' +
-      '- NOTEBOOK: saving or listing structured personal rows (purchases with price/date, spending log, medicine + day/schedule, "add to my table/log").\n' +
+      '- NOTEBOOK: ADD one row, DELETE row, EXPLICIT full-table list, or multi-line pasted buying/inventory list.\n' +
       'Reply with only one word.';
   const text = await chat(
     [{ role: 'system', content: system }, { role: 'user', content: userMessage.slice(0, 2000) }],
@@ -590,11 +592,13 @@ export async function parseUserRecordRequest(userMessage) {
         content:
           'You extract structured "notebook" rows from the user message (purchases, medicine log). Reply with JSON only, no markdown.\n' +
           `Clock (for dates like "today"): local calendar date ${ck.localDateYmd}; timezone ${ck.tz}; local: ${ck.localLong}.\n` +
-          'Schema: {"op":"add"|"list"|"delete","record_type":"purchase"|"medicine"|"other","title":"","occurred_on":"YYYY-MM-DD or empty","amount":null,"currency":"","notes":"","schedule":"","delete_id":null,"list_filter":""}\n' +
-          '- op "add": user wants to save a row. Set record_type: purchase if money/price/bought; medicine if pills/drug/dose; else other.\n' +
-          '- For purchases: set title (item), occurred_on (purchase date; default today if they say "today" or omit), amount + currency (e.g. 2000 THB).\n' +
-          '- For medicine: title = medicine name; occurred_on = a specific day if given, else empty; schedule = free text (e.g. "every morning", "May 3 only"). Put extra free text in notes.\n' +
-          '- op "list": user asks to show/list their saved purchases, medicine log, or table. Set list_filter to "purchase", "medicine", or "" for all.\n' +
+          'Schema: {"op":"add"|"list"|"delete","record_type":"purchase"|"sale"|"medicine"|"other","title":"","occurred_on":"YYYY-MM-DD or empty","amount":null,"currency":"","notes":"","schedule":"","quantity":null,"quantity_unit":"","delete_id":null,"list_filter":""}\n' +
+          '- op "add": user wants to save a row. record_type "sale" when they SOLD, USED, SHIPPED, or REMOVED stock (quantity must be the number of units removed). "purchase" for buying/receiving stock.\n' +
+          '- For purchases: set title (item), occurred_on, amount + currency when given; set quantity + quantity_unit when they state units (e.g. 80 pcs).\n' +
+          '- For sales: record_type "sale", same title as inventory line, quantity = units sold (positive number in JSON; the app stores as negative stock).\n' +
+          '- For medicine: title = medicine name; occurred_on if given; schedule = free text; quantity optional; extra text in notes.\n' +
+          '- op "list": ONLY when the user clearly wants the FULL saved table or log printed (e.g. "list all my purchases", "show everything I saved"). NOT for one-item questions like "when did I buy X".\n' +
+          '- For list requests, set list_filter to "purchase", "medicine", or "" for all.\n' +
           '- op "delete": user removes a row; set delete_id to the numeric id if they say e.g. "delete #12" or "remove id 5".\n' +
           '- Use occurred_on as strict YYYY-MM-DD when you can infer the calendar day from the message.',
       },
@@ -608,6 +612,50 @@ export async function parseUserRecordRequest(userMessage) {
   } catch (e) {
     logger.warn(`parseUserRecordRequest JSON fail: ${e.message}`);
     return { op: 'list', record_type: 'other', title: '', occurred_on: '', list_filter: '' };
+  }
+}
+
+/**
+ * Extract many product/purchase lines from a pasted table or numbered list (inventory, buying list).
+ * Returns { occurred_on?, currency?, items: [...] }. Empty items if the message is not a product list.
+ */
+export async function parseBulkPurchaseLines(userMessage) {
+  const ck = getCalendarClockContext();
+  const raw = await chat(
+    [
+      {
+        role: 'system',
+        content:
+          'You extract a BUYING / INVENTORY list from the user message. Reply with JSON only, no markdown.\n' +
+          `If the message is NOT a tabular or numbered product list, reply exactly: {"items":[]}\n` +
+          `Clock for default purchase date: ${ck.localDateYmd} (use only if user implies "today" and no other date).\n` +
+          'Top-level schema: {"occurred_on":"YYYY-MM-DD or empty","currency":"MMK or THB or empty","items":[...]}\n' +
+          'Each item: {"occurred_on":"YYYY-MM-DD optional — set from the line date when the user wrote one (e.g. 30.07.25 → 2025-07-30)","line_no":number optional,"movement":"purchase"|"sale" optional default purchase,"title":"short label","subtype":"..." optional,"quantity":number optional,"quantity_unit":"yards|pcs|..." optional,"quantity_label":"..." optional,"unit_price":number optional,"line_total":number optional,"notes":"" optional}\n' +
+          '- Put device/bill serials (e.g. M1HT01158227) in notes or title so rows can be de-duplicated.\n' +
+          '- movement "sale" for sold/used/shipped lines; quantity is units removed (positive in JSON). For purchases omit movement or use "purchase".\n' +
+          '- Strip thousands separators from numbers. Prefer line_total as the line amount when present.\n' +
+          '- One JSON object per physical line in their list (skip header rows and blank lines).\n' +
+          '- Same product on multiple lines = multiple items with the same title (do not merge).\n' +
+          '- currency: use one code for the whole list when obvious (MMK, THB, USD); else empty.',
+      },
+      { role: 'user', content: userMessage.slice(0, 16000) },
+    ],
+    { timeoutMs: 120000, temperature: 0 }
+  );
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    const data = JSON.parse(cleaned);
+    if (!data || typeof data !== 'object') return { items: [] };
+    const items = data.items || data.rows;
+    if (!Array.isArray(items)) return { items: [] };
+    return {
+      occurred_on: data.occurred_on,
+      currency: data.currency,
+      items,
+    };
+  } catch (e) {
+    logger.warn(`parseBulkPurchaseLines JSON fail: ${e.message}`);
+    return { items: [] };
   }
 }
 

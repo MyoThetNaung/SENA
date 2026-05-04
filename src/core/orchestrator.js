@@ -3,6 +3,7 @@ import { resolveEventStartsAt, getCalendarClockContext } from '../calendar/resol
 import {
   chat,
   parseCalendarRequest,
+  parseBulkPurchaseLines,
   parseUserRecordRequest,
   summarizeWebContent,
   baseSystemPrompt,
@@ -10,11 +11,15 @@ import {
 } from '../llm/ollama.js';
 import {
   addUserRecord,
+  bulkAddPurchaseLines,
   deleteUserRecordById,
+  formatInventoryNetByTitle,
   formatUserRecordsForPrompt,
   formatUserRecordsReply,
   normalizeOccurredOn,
+  partitionBulkItemsAgainstExisting,
 } from '../records/userRecords.js';
+import { listChatMessages } from '../chat/chatLog.js';
 import { decideIntent } from './intent.js';
 import { formatSoulForPrompt, getSoul, ensureSoul } from '../memory/soul.js';
 import { searchAndSummarize } from '../tools/browser.js';
@@ -24,6 +29,9 @@ import { getConfig } from '../config.js';
 
 const YES = /^(yes|y|confirm|ok|okay|👍)$/i;
 const NO = /^(no|n|cancel|stop|👎)$/i;
+
+/** Prior turns sent with each model call so follow-ups keep context (GUI/Telegram append user row before this runs). */
+const CHAT_HISTORY_MSG_LIMIT = 48;
 
 /** English-focused; avoids calling the LLM for “what model are you?” so small models cannot hallucinate Gemini/GPT. */
 function isRuntimeLlmIdentityQuestion(text) {
@@ -57,18 +65,141 @@ function formatEvents(rows) {
     .join('\n');
 }
 
+/** User clearly wants the raw full saved table, not a Q&A about one row. */
+function isExplicitSavedTableListRequest(text) {
+  const t = String(text || '').trim();
+  const lower = t.toLowerCase();
+  if (/\b(list|show|display|print|give)\s+(me\s+)?(all|everything|full)\b/i.test(lower)) return true;
+  if (/\b(list|show|display)\b.*\b(all|every)\s+(saved\s+)?(purchase|row|record)/i.test(lower)) return true;
+  if (/\b(all|full|complete)\s+(saved\s+)?(rows|records|purchases|table|log)\b/i.test(lower)) return true;
+  if (/\b(my\s+)?(saved\s+)?(table|rows|notebook|log)\b.*\b(list|show|dump)\b/i.test(lower)) return true;
+  if (/\b(list|show|display)\b.*\b(my\s+)?(saved\s+)?(purchase|purchases|medicine|medication|row|rows|log)\b/i.test(lower))
+    return true;
+  if (/စာရင်း.*ပြပါ|ပြပါ.*စာရင်း|အားလုံး.*ပြပါ|ဘာတွေစွဲထားလဲ/u.test(t)) return true;
+  return false;
+}
+
+/** Pasted multi-line buying / inventory table — worth running bulk extract + save. */
+function shouldTryBulkImport(text) {
+  const raw = String(text || '').trim();
+  if (raw.length < 120) return false;
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 5) return false;
+  const head = lines.slice(0, 6).join('\n').toLowerCase();
+  const lower = raw.toLowerCase();
+  const hasTableCue =
+    /\t/.test(raw) ||
+    lines.filter((l) => (l.match(/\|/g) || []).length >= 3).length >= 2 ||
+    /\b(no\.?|product|type|qty|quantity|unit\s*price|total|yards)\b/i.test(head);
+  const bigNums = (raw.match(/\d{3,}/g) || []).length >= 6;
+  const hasIntentCue =
+    /\b(record|save|add|log|inventory|buying list|purchase list|line items|stock list)\b/i.test(lower) ||
+    /စာရင်း|မှတ်ပါ|သိမ်းပါ/u.test(raw);
+  if (hasTableCue && (lines.length >= 6 || bigNums)) return true;
+  if (lines.length >= 12 && bigNums && hasIntentCue) return true;
+  if (lines.length >= 15 && bigNums) return true;
+  return false;
+}
+
+function isBulkVerifyOnlyRequest(text) {
+  const t = String(text || '').toLowerCase();
+  return /\b(double\s+check|triple\s+check|did\s+i\s+save|already\s+saved|verify\s+(if|that|this)|check\s+(if|that)\s+(i\s+)?saved|duplicate\s+check)\b/i.test(
+    t
+  );
+}
+
+async function tryBulkSavePurchases(userId, userText) {
+  if (!shouldTryBulkImport(userText)) return null;
+  let parsed;
+  try {
+    parsed = await parseBulkPurchaseLines(userText);
+  } catch (e) {
+    logger.warn(`parseBulkPurchaseLines: ${e.message}`);
+    return null;
+  }
+  const items = parsed.items || parsed.rows || [];
+  if (!Array.isArray(items) || items.length < 1) return null;
+  const lineCount = userText.split(/\r?\n/).filter((l) => l.trim()).length;
+  if (items.length < 2 && !(lineCount >= 12 && items.length >= 1)) return null;
+  const ck = getCalendarClockContext();
+  const occurred_on = normalizeOccurredOn(parsed.occurred_on) || ck.localDateYmd;
+  const currency = parsed.currency != null ? String(parsed.currency).trim().slice(0, 12) : null;
+  const { toInsert, skippedCount, totalIncoming } = partitionBulkItemsAgainstExisting(userId, items, occurred_on);
+  const verifyOnly = isBulkVerifyOnlyRequest(userText);
+
+  if (verifyOnly) {
+    const newCount = toInsert.length;
+    if (skippedCount === totalIncoming) {
+      return `Double-check: all ${totalIncoming} line(s) match data already saved (same date, amount, and title/serial fingerprint). Nothing was added.`;
+    }
+    if (skippedCount === 0) {
+      return `Double-check: none of these ${totalIncoming} line(s) match existing rows — they look new. I did not add anything. Send again without "double check" (or say "save this list") to record them.`;
+    }
+    return `Double-check: ${skippedCount} line(s) already saved, ${newCount} look new. I did not add anything. Send again without "double check" to save only the ${newCount} new line(s), or paste a shorter message.`;
+  }
+
+  if (toInsert.length === 0) {
+    return `All ${totalIncoming} line(s) match rows already on file (duplicate detection). Nothing new added.`;
+  }
+
+  let result;
+  try {
+    result = bulkAddPurchaseLines(userId, {
+      occurred_on,
+      currency,
+      items: toInsert,
+    });
+  } catch (e) {
+    logger.error(`bulkAddPurchaseLines: ${e.message}`);
+    return null;
+  }
+  if (!result.count) return null;
+  const range =
+    result.firstId != null && result.lastId != null
+      ? result.firstId === result.lastId
+        ? `row id #${result.firstId}`
+        : `row ids #${result.firstId}–#${result.lastId}`
+      : '';
+  const dupNote = skippedCount ? ` Skipped ${skippedCount} duplicate line(s) already saved.` : '';
+  return `Saved ${result.count} new purchase line(s) to your table${range ? ` (${range})` : ''}.${dupNote} Ask totals per product, or say "list all my purchases" for the full dump.`;
+}
+
 function buildMessages(userId, userText) {
   const soul = getSoul(userId);
   const memoryBlock = formatSoulForPrompt(soul);
-  const recordsBlock = formatUserRecordsForPrompt(userId, 45);
+  const recordsBlock = formatUserRecordsForPrompt(userId, 100);
+  const invNet = formatInventoryNetByTitle(userId, 500);
   const recordsSection = recordsBlock.startsWith('No structured records')
     ? recordsBlock
-    : `Structured records (purchases / medicine — quote these for exact dates, prices, and names; do not invent rows):\n${recordsBlock}`;
-  const system = `${baseSystemPrompt(userId)}\n\n---\nUser memory (Soul ID):\n${memoryBlock}\n\n---\n${recordsSection}`;
-  return [
-    { role: 'system', content: system },
-    { role: 'user', content: userText },
-  ];
+    : `Structured records (purchases / sales / medicine — authoritative facts only from this list; do not invent rows).\n` +
+      `Rows with record type "sale (stock out)" have negative qty: subtract from inventory. Sum all qty values for the same product title (case-insensitive) to get on-hand quantity.\n` +
+      `When the user asks how many / inventory / stock, use the pre-calculated net line below if present, and match product names flexibly (e.g. "3M Dobby" vs "3m dobby").\n` +
+      `When the user asks about one fact, answer briefly. Do not paste the whole block unless they ask for the full list.\n${recordsBlock}` +
+      (invNet
+        ? `\n\n---\nPre-calculated net quantity (sum of qty for each product title; purchase + sale rows only):\n${invNet}`
+        : '');
+  const system =
+    `${baseSystemPrompt(userId)}\n\n---\n` +
+    `This request includes prior turns of this chat (user and assistant, oldest to newest) after the system block. ` +
+    `Use them for follow-ups (e.g. "share the detail list", "same month", "break that down") without asking the user to repeat the whole topic.\n\n---\n` +
+    `User memory (Soul ID):\n${memoryBlock}\n\n---\n${recordsSection}`;
+
+  const messages = [{ role: 'system', content: system }];
+  const rows = listChatMessages({ userId, limit: CHAT_HISTORY_MSG_LIMIT });
+  for (const r of rows) {
+    const role = String(r.role || '').toLowerCase();
+    if (role === 'system') continue;
+    if (role !== 'user' && role !== 'assistant') continue;
+    messages.push({ role, content: String(r.content ?? '') });
+  }
+  const trimmed = String(userText ?? '').trim();
+  const last = rows[rows.length - 1];
+  const lastContent = last ? String(last.content ?? '').trim() : '';
+  const lastRole = last ? String(last.role || '').toLowerCase() : '';
+  if (!last || lastRole !== 'user' || lastContent !== trimmed) {
+    messages.push({ role: 'user', content: trimmed });
+  }
+  return messages;
 }
 
 async function runWebSearch(userId, query) {
@@ -152,8 +283,11 @@ async function handleNotebook(userId, userText) {
   }
 
   if (op === 'list') {
+    if (!isExplicitSavedTableListRequest(userText)) {
+      return null;
+    }
     const lf = String(parsed.list_filter || parsed.record_type || '').toLowerCase();
-    const filter = lf === 'purchase' || lf === 'medicine' ? lf : null;
+    const filter = lf === 'purchase' || lf === 'medicine' || lf === 'sale' ? lf : null;
     return formatUserRecordsReply(userId, {
       limit: 50,
       record_type: filter,
@@ -166,12 +300,35 @@ async function handleNotebook(userId, userText) {
       return 'Tell me what to save (item name or medicine name), and for purchases include price and currency if you can.';
     }
     let rt = String(parsed.record_type || '').toLowerCase();
-    if (!['purchase', 'medicine', 'other'].includes(rt)) rt = 'other';
+    if (!['purchase', 'medicine', 'other', 'sale'].includes(rt)) rt = 'other';
+    if (rt === 'purchase' && /\b(sold|sell|sold off|used up|shipped out|removed from stock|deduct(ed)?)\b/i.test(userText)) {
+      rt = 'sale';
+    }
     let occurredOn = normalizeOccurredOn(parsed.occurred_on);
-    if (!occurredOn && rt === 'purchase') occurredOn = ck.localDateYmd;
+    if (!occurredOn && (rt === 'purchase' || rt === 'sale')) occurredOn = ck.localDateYmd;
     const schedule = String(parsed.schedule || '').trim().slice(0, 500);
     const notes = String(parsed.notes || '').trim().slice(0, 2000);
-    const meta = schedule ? { schedule } : {};
+    const meta = {};
+    if (rt === 'medicine' && schedule) meta.schedule = schedule;
+    let qRaw = parsed.quantity != null ? Number(parsed.quantity) : null;
+    if (!Number.isFinite(qRaw)) qRaw = null;
+    const qu = parsed.quantity_unit != null ? String(parsed.quantity_unit).trim().slice(0, 40) : '';
+    if (rt === 'sale' && qRaw == null) {
+      const m = userText.match(/\b(?:sold|sell|sold\s+off)\s+(\d{1,9})\b/i);
+      if (m) qRaw = Number(m[1]);
+    }
+    if (Number.isFinite(qRaw) && qRaw !== 0) {
+      if (rt === 'sale') {
+        meta.quantity = -Math.abs(qRaw);
+        meta.movement = 'sale';
+        if (qu) meta.quantity_unit = qu;
+      } else if (rt === 'purchase') {
+        meta.quantity = Math.abs(qRaw);
+        if (qu) meta.quantity_unit = qu;
+      }
+    } else if (rt === 'sale') {
+      meta.movement = 'sale';
+    }
     let amount = parsed.amount;
     if (amount != null && amount !== '') {
       const n = Number(amount);
@@ -195,12 +352,26 @@ async function handleNotebook(userId, userText) {
           ? ` · ${row.amount}${row.currency ? ' ' + row.currency : ''}`
           : '';
       const when = row.occurred_on ? ` · ${row.occurred_on}` : '';
-      return `Saved to your table as #${row.id}: ${row.record_type} "${row.title}"${when}${price}. You can ask anytime (e.g. list my purchases or what medicine is logged).`;
+      const qtyHint =
+        row.record_type === 'sale' && row.meta
+          ? (() => {
+              try {
+                const o = JSON.parse(row.meta);
+                return Number.isFinite(o.quantity) ? ` · qty ${o.quantity}` : '';
+              } catch {
+                return '';
+              }
+            })()
+          : '';
+      return `Saved to your table as #${row.id}: ${row.record_type} "${row.title}"${when}${price}${qtyHint}. For inventory, ask "how many X" — sales are stored as negative quantity.`;
     } catch (e) {
       return `Could not save: ${e.message}`;
     }
   }
 
+  if (!isExplicitSavedTableListRequest(userText)) {
+    return null;
+  }
   return formatUserRecordsReply(userId, { limit: 40, record_type: null });
 }
 
@@ -270,9 +441,23 @@ export async function handleTextMessage(userId, text) {
     }
   }
 
+  if ((intent === 'CHAT' || intent === 'NOTEBOOK') && shouldTryBulkImport(trimmed)) {
+    const bulkReply = await tryBulkSavePurchases(userId, trimmed);
+    if (bulkReply) return { reply: bulkReply };
+  }
+
   if (intent === 'NOTEBOOK') {
     try {
       const reply = await handleNotebook(userId, trimmed);
+      if (reply == null) {
+        try {
+          const chatReply = await chat(buildMessages(userId, trimmed), { timeoutMs: 120000 });
+          return { reply: chatReply || '(empty model response)' };
+        } catch (e) {
+          logger.error(`Chat error (notebook→chat): ${e.message}`);
+          return { reply: `Model error: ${e.message}` };
+        }
+      }
       return { reply };
     } catch (e) {
       logger.error(`Notebook handler error: ${e.message}`);

@@ -16,6 +16,18 @@ export function keywordIntentHint(text) {
   ) {
     return 'CALENDAR';
   }
+  /* Questions about one saved purchase/medicine row → CHAT (records are in context; avoid dumping the whole table). */
+  const textRaw = String(text || '');
+  const looksLikeRecordLookup =
+    /\b(when|how much|how many|which day|what day|did i pay|did i buy|what did i pay|what did i buy)\b/i.test(t) ||
+    /ဘယ်နေ့|ဘယ်တော့|ဘယ်လောက်|ဝယ်ခဲ့|ပေးရမှာ|ပေးဖို့|ပေးရမလဲ|တုန်းက/u.test(textRaw);
+  const explicitFullList =
+    /\b(list|show|display|print)\b.*\b(all|everything|full)\b/i.test(t) ||
+    /\b(all|every|full)\b.*\b(saved\s+)?(row|purchase|record)/i.test(t) ||
+    /စာရင်း.*ပြပါ|ပြပါ.*စာရင်း|အားလုံး.*ပြပါ|ဘာတွေစွဲထားလဲ/u.test(textRaw);
+  if (looksLikeRecordLookup && !explicitFullList) {
+    return 'CHAT';
+  }
   if (
     getConfig().webSearchEnabled &&
     (/\b(search|look up|google)\b.+\b(for|about)\b/.test(t) ||
@@ -24,7 +36,16 @@ export function keywordIntentHint(text) {
     return 'SEARCH';
   }
   if (
+    /\b(i\s+)?sold\s+\d{1,9}\b/i.test(textRaw) &&
+    !/\b(how much did i sell|when did i sell)\b/i.test(t)
+  ) {
+    return 'NOTEBOOK';
+  }
+  if (
     /\b(add|save|log|record|put)\b.+\b(in\s+(the\s+)?table|to\s+(my\s+)?(table|log))\b/.test(t) ||
+    /\b(record|save|log)\b.+\b(buying|inventory|stock|purchase)\b.+\b(list|lines|sheet|items|products)\b/i.test(
+      t
+    ) ||
     /\b(medicine|medication|pill|tablet|dose)\b.+\b(log|schedule|table|record)\b/.test(t) ||
     /\b(purchase|bought|paid|spend|spending|price|thb|baht)\b.+\b(log|table|record)\b/.test(t) ||
     /\b(my\s+)?(purchases|spending)\s+(log|list|table)\b/.test(t) ||
