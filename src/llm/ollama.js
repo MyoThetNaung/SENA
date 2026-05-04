@@ -668,14 +668,16 @@ export async function parseCalendarRequest(userMessage) {
         content:
           'You extract calendar intent from the user message. Reply with JSON only, no markdown.\n' +
           `The user's computer clock (authoritative for "today", "tomorrow", etc.): ISO ${ck.iso}; local: ${ck.localLong}; timezone: ${ck.tz}; local calendar date: ${ck.localDateYmd}.\n` +
-          'Schema: {"op":"add"|"today"|"upcoming","title":"","starts_at":""}\n' +
-          '- op "add": set title and starts_at as a valid ISO 8601 string (UTC or offset) for the event start.\n' +
-          '- Compute "tomorrow", "today", "next Monday" from the clock above (same timezone as the user\'s PC).\n' +
-          '- If no time is given, use 09:00 local for that day for meetings/reminders unless the user implies evening.\n' +
-          '- op "today": user asks about today schedule.\n' +
-          '- op "upcoming": user asks upcoming schedule (default next 10).\n',
+          'Schema: {"op":"add"|"today"|"upcoming"|"day","title":"","starts_at":"","on_date":""}\n' +
+          '- op "day": user asks what is on a SPECIFIC calendar day (e.g. "tomorrow", "May 6", "plans on the 6th", "anything on 2026-05-06"). Set on_date to YYYY-MM-DD in the user local calendar (from the clock above). For "tomorrow", use the day after localDateYmd.\n' +
+          '- op "upcoming": user wants a general upcoming list with no single day filter.\n' +
+          '- op "today": today only.\n' +
+          '- op "add": set title and starts_at as ISO 8601 for one new event.\n' +
+          '- For "add" compute "tomorrow", "today", "next Monday" from the clock above.\n' +
+          '- If no time is given for add, use 09:00 local for that day unless the user implies evening.\n' +
+          '- When unsure between day vs upcoming: choose "day" if they name a date or say tomorrow/yesterday/today for "what\'s on".\n',
       },
-      { role: 'user', content: userMessage.slice(0, 2000) },
+      { role: 'user', content: userMessage.slice(0, 8000) },
     ],
     { timeoutMs: 60000, temperature: 0 }
   );
@@ -685,6 +687,42 @@ export async function parseCalendarRequest(userMessage) {
   } catch (e) {
     logger.warn(`parseCalendarRequest JSON fail: ${e.message}`);
     return { op: 'upcoming', title: '', starts_at: '' };
+  }
+}
+
+/**
+ * Many time blocks (e.g. Mon–Sun weekly grid). Returns { events: [{ title, starts_at }, ...] }.
+ */
+export async function parseBulkCalendarSchedule(userMessage) {
+  const ck = getCalendarClockContext();
+  const raw = await chat(
+    [
+      {
+        role: 'system',
+        content:
+          'You extract MULTIPLE calendar events from a weekly or multi-day schedule (day names + time ranges + titles). Reply with JSON only, no markdown.\n' +
+          `Clock (authoritative): ISO ${ck.iso}; local calendar date ${ck.localDateYmd}; timezone ${ck.tz}; ${ck.localLong}\n` +
+          'Schema: {"events":[{"title":"string","starts_at":"ISO 8601 with offset for event START"}, ...]}\n' +
+          '- One event per time block. Use the START time only (e.g. "08:00 - 12:00" → start at 08:00 that day).\n' +
+          '- Map Monday, Tuesday, … Sunday to real calendar dates in ONE contiguous week.\n' +
+          `- If the user does not name a week, use the week whose Monday is the **next Monday on or after** ${ck.localDateYmd} (if ${ck.localDateYmd} is already Monday, use that Monday as day "Monday").\n` +
+          '- Title = activity after ":" or the whole activity phrase (keep short, under 200 chars).\n' +
+          '- starts_at must be valid ISO 8601 (prefer local offset from the user PC timezone).\n' +
+          '- Chronological order. Max 60 events.\n' +
+          '- If the message is NOT a multi-slot schedule, return {"events":[]}.',
+      },
+      { role: 'user', content: userMessage.slice(0, 14000) },
+    ],
+    { timeoutMs: 120000, temperature: 0 }
+  );
+  try {
+    const cleaned = raw.replace(/```json|```/g, '').trim();
+    const data = JSON.parse(cleaned);
+    const events = data && Array.isArray(data.events) ? data.events : [];
+    return { events };
+  } catch (e) {
+    logger.warn(`parseBulkCalendarSchedule JSON fail: ${e.message}`);
+    return { events: [] };
   }
 }
 

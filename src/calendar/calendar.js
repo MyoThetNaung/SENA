@@ -31,6 +31,34 @@ export function getTodayEvents(userId) {
   return rows;
 }
 
+/** @param {string} ymd YYYY-MM-DD (local calendar day) */
+export function getEventsForLocalDate(userId, ymd) {
+  const m = String(ymd || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return [];
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const start = new Date(y, mo - 1, d);
+  if (
+    start.getFullYear() !== y ||
+    start.getMonth() !== mo - 1 ||
+    start.getDate() !== d
+  ) {
+    return [];
+  }
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT id, starts_at, title FROM events
+       WHERE user_id = ? AND starts_at >= ? AND starts_at < ?
+       ORDER BY starts_at ASC`
+    )
+    .all(userId, start.toISOString(), end.toISOString());
+}
+
 export function listAllEvents(limit = 300) {
   const db = getDb();
   const lim = Math.min(2000, Math.max(1, Number(limit) || 300));

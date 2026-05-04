@@ -1,8 +1,9 @@
-import { addEvent, getTodayEvents, getUpcomingEvents } from '../calendar/calendar.js';
+import { addEvent, getTodayEvents, getUpcomingEvents, getEventsForLocalDate } from '../calendar/calendar.js';
 import { resolveEventStartsAt, getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import {
   chat,
   parseCalendarRequest,
+  parseBulkCalendarSchedule,
   parseBulkPurchaseLines,
   parseUserRecordRequest,
   summarizeWebContent,
@@ -202,6 +203,56 @@ function buildMessages(userId, userText) {
   return messages;
 }
 
+/** Multi-line Mon–Sun style schedule → many calendar events (not single parseCalendarRequest). */
+function shouldTryBulkCalendarSchedule(text) {
+  const raw = String(text || '').trim();
+  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 4) return false;
+  if (!/\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b/i.test(raw)) {
+    return false;
+  }
+  const ranges = raw.match(/\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}/g) || [];
+  return ranges.length >= 2 || lines.length >= 6;
+}
+
+async function addManyCalendarEvents(userId, fullText, events) {
+  const max = 60;
+  const added = [];
+  let failed = 0;
+  for (const ev of events.slice(0, max)) {
+    const title = String(ev.title || 'Event').trim().slice(0, 500) || 'Event';
+    let starts =
+      resolveEventStartsAt(ev.starts_at, fullText) || String(ev.starts_at || '').trim();
+    if (!starts) {
+      failed += 1;
+      continue;
+    }
+    const d = new Date(starts);
+    if (Number.isNaN(d.getTime())) {
+      failed += 1;
+      continue;
+    }
+    starts = d.toISOString();
+    try {
+      const row = addEvent(userId, starts, title);
+      added.push(row);
+    } catch {
+      failed += 1;
+    }
+  }
+  if (!added.length) {
+    return 'Could not add any events from that schedule. Check each line has a weekday and start time, or try fewer lines at once.';
+  }
+  const preview = added
+    .slice(0, 6)
+    .map((r) => `• "${r.title}" — ${new Date(r.starts_at).toLocaleString()}`)
+    .join('\n');
+  const more = added.length > 6 ? `\n… and ${added.length - 6} more.` : '';
+  let msg = `Added ${added.length} calendar event(s):\n${preview}${more}`;
+  if (failed) msg += `\n(${failed} line(s) could not be parsed as valid times.)`;
+  return msg;
+}
+
 async function runWebSearch(userId, query) {
   if (!getConfig().webSearchEnabled) {
     try {
@@ -220,13 +271,135 @@ async function runWebSearch(userId, query) {
   return { reply: summary };
 }
 
+function addCalendarDaysYmd(localYmd, deltaDays) {
+  const parts = String(localYmd || '').split('-').map(Number);
+  if (parts.length !== 3 || !parts.every((n) => Number.isFinite(n))) return null;
+  const dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  dt.setDate(dt.getDate() + deltaDays);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+/** Fast path: "tomorrow plan", "May 6 … schedule" → one local calendar day. */
+function keywordCalendarSingleDayQuery(text, localDateYmd) {
+  const t = String(text || '').toLowerCase();
+  const looksLikeDayQuery =
+    /\b(plan|plans|schedule|calendar|anything|what)\b/.test(t) ||
+    /\b(is there|do i have|any)\b.*\b(on|for)\b/.test(t);
+  if (!looksLikeDayQuery && !/\b(on|for)\s+may\b/.test(t)) return null;
+
+  if (/\b(day after tomorrow)\b/.test(t)) {
+    const y = addCalendarDaysYmd(localDateYmd, 2);
+    if (y) return { onDate: y, label: 'the day after tomorrow' };
+  }
+  if (/\btomorrow\b/.test(t)) {
+    const y = addCalendarDaysYmd(localDateYmd, 1);
+    if (y) return { onDate: y, label: 'tomorrow' };
+  }
+  if (/\b(today|this evening|tonight)\b/.test(t) && !/\btomorrow\b/.test(t)) {
+    return { onDate: localDateYmd, label: 'today' };
+  }
+
+  const mIso = text.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/);
+  if (mIso) {
+    const ymd = `${mIso[1]}-${mIso[2]}-${mIso[3]}`;
+    if (normalizeOccurredOn(ymd)) return { onDate: ymd, label: ymd };
+  }
+
+  const mDow = text.match(/\b(\d{1,2})[/-](\d{1,2})[/-](20\d{2})\b/);
+  if (mDow) {
+    const mm = mDow[1].padStart(2, '0');
+    const dd = mDow[2].padStart(2, '0');
+    const ymd = `${mDow[3]}-${mm}-${dd}`;
+    if (normalizeOccurredOn(ymd)) return { onDate: ymd, label: ymd };
+  }
+
+  const mMay = text.match(/\bmay\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(20\d{2}))?\b/i);
+  if (mMay) {
+    const dom = parseInt(mMay[1], 10);
+    let year = mMay[2] ? parseInt(mMay[2], 10) : parseInt(localDateYmd.split('-')[0], 10);
+    if (!mMay[2]) {
+      const [cy, cm, cd] = localDateYmd.split('-').map(Number);
+      const ref = new Date(cy, cm - 1, cd);
+      ref.setHours(0, 0, 0, 0);
+      let cand = new Date(year, 4, dom);
+      cand.setHours(0, 0, 0, 0);
+      if (cand < ref) year += 1;
+    }
+    const ymd = `${year}-05-${String(dom).padStart(2, '0')}`;
+    if (normalizeOccurredOn(ymd)) return { onDate: ymd, label: `May ${dom}` };
+  }
+
+  const mJun = text.match(/\bjune\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,?\s*(20\d{2}))?\b/i);
+  if (mJun) {
+    const dom = parseInt(mJun[1], 10);
+    let year = mJun[2] ? parseInt(mJun[2], 10) : parseInt(localDateYmd.split('-')[0], 10);
+    if (!mJun[2]) {
+      const [cy, cm, cd] = localDateYmd.split('-').map(Number);
+      const ref = new Date(cy, cm - 1, cd);
+      ref.setHours(0, 0, 0, 0);
+      let cand = new Date(year, 5, dom);
+      cand.setHours(0, 0, 0, 0);
+      if (cand < ref) year += 1;
+    }
+    const ymd = `${year}-06-${String(dom).padStart(2, '0')}`;
+    if (normalizeOccurredOn(ymd)) return { onDate: ymd, label: `June ${dom}` };
+  }
+
+  return null;
+}
+
 async function handleCalendar(userId, text) {
+  if (shouldTryBulkCalendarSchedule(text)) {
+    try {
+      const bulk = await parseBulkCalendarSchedule(text);
+      const events = Array.isArray(bulk.events) ? bulk.events : [];
+      if (events.length >= 1) {
+        return await addManyCalendarEvents(userId, text, events);
+      }
+      return 'That looks like a weekly schedule, but I could not extract multiple time slots. Use lines like "Monday 08:00 - 12:00 : Title" and try again, or add a few events at a time.';
+    } catch (e) {
+      logger.warn(`parseBulkCalendarSchedule: ${e.message}`);
+    }
+  }
+
+  const ck = getCalendarClockContext();
+  const kwDay = keywordCalendarSingleDayQuery(text, ck.localDateYmd);
+  if (kwDay && normalizeOccurredOn(kwDay.onDate)) {
+    const rows = getEventsForLocalDate(userId, kwDay.onDate);
+    const head =
+      rows.length === 0
+        ? `No calendar events on ${kwDay.label} (${kwDay.onDate}).`
+        : `Your schedule for ${kwDay.label} (${kwDay.onDate}):`;
+    const body = rows.length ? `\n${formatEvents(rows)}` : '';
+    return `${head}${body}`;
+  }
+
   const parsed = await parseCalendarRequest(text);
   const op = String(parsed.op || 'upcoming').toLowerCase();
 
   if (op === 'today') {
     const rows = getTodayEvents(userId);
     return `Here's your schedule today:\n${formatEvents(rows)}`;
+  }
+  if (op === 'day') {
+    let ymd = normalizeOccurredOn(parsed.on_date) || normalizeOccurredOn(parsed.day);
+    if (!ymd) {
+      const d = new Date(String(parsed.starts_at || '').trim());
+      if (!Number.isNaN(d.getTime())) {
+        ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+          d.getDate()
+        ).padStart(2, '0')}`;
+      }
+    }
+    if (ymd) {
+      const rows = getEventsForLocalDate(userId, ymd);
+      const head =
+        rows.length === 0
+          ? `No calendar events on ${ymd}.`
+          : `Here's your schedule for ${ymd}:`;
+      const body = rows.length ? `\n${formatEvents(rows)}` : '';
+      return `${head}${body}`;
+    }
   }
   if (op === 'upcoming' || op === 'list') {
     const rows = getUpcomingEvents(userId);
