@@ -31,8 +31,11 @@ import { getConfig } from '../config.js';
 const YES = /^(yes|y|confirm|ok|okay|👍)$/i;
 const NO = /^(no|n|cancel|stop|👎)$/i;
 
-/** Prior turns sent with each model call so follow-ups keep context (GUI/Telegram append user row before this runs). */
-const CHAT_HISTORY_MSG_LIMIT = 48;
+/** Hard cap for prior turns sent with each model call. Runtime picks a smaller window for cost/speed. */
+const CHAT_HISTORY_MSG_LIMIT_MAX = 48;
+const CHAT_HISTORY_MSG_LIMIT_MED = 28;
+const CHAT_HISTORY_MSG_LIMIT_MIN = 16;
+const HISTORY_MSG_CHAR_LIMIT = 1400;
 
 /** English-focused; avoids calling the LLM for “what model are you?” so small models cannot hallucinate Gemini/GPT. */
 function isRuntimeLlmIdentityQuestion(text) {
@@ -165,35 +168,56 @@ async function tryBulkSavePurchases(userId, userText) {
   return `Saved ${result.count} new purchase line(s) to your table${range ? ` (${range})` : ''}.${dupNote} Ask totals per product, or say "list all my purchases" for the full dump.`;
 }
 
-function buildMessages(userId, userText) {
+function pickChatHistoryLimit(userText) {
+  const text = String(userText || '').trim();
+  if (!text) return CHAT_HISTORY_MSG_LIMIT_MED;
+  if (text.length >= 1200) return CHAT_HISTORY_MSG_LIMIT_MIN;
+  if (text.length <= 220) return CHAT_HISTORY_MSG_LIMIT_MAX;
+  return CHAT_HISTORY_MSG_LIMIT_MED;
+}
+
+function trimPromptMessageContent(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return '';
+  if (text.length <= HISTORY_MSG_CHAR_LIMIT) return text;
+  return `${text.slice(0, HISTORY_MSG_CHAR_LIMIT)}\n...[trimmed for context window]`;
+}
+
+function buildMessages(userId, userText, options = {}) {
+  const includeRecords = options.includeRecords !== false;
   const soul = getSoul(userId);
   const memoryBlock = formatSoulForPrompt(soul);
-  const recordsBlock = formatUserRecordsForPrompt(userId, 100);
-  const invNet = formatInventoryNetByTitle(userId, 500);
-  const recordsSection = recordsBlock.startsWith('No structured records')
-    ? recordsBlock
-    : `Structured records (purchases / sales / medicine — authoritative facts only from this list; do not invent rows).\n` +
-      `Rows with record type "sale (stock out)" have negative qty: subtract from inventory. Sum all qty values for the same product title (case-insensitive) to get on-hand quantity.\n` +
-      `When the user asks how many / inventory / stock, use the pre-calculated net line below if present, and match product names flexibly (e.g. "3M Dobby" vs "3m dobby").\n` +
-      `When the user asks about one fact, answer briefly. Do not paste the whole block unless they ask for the full list.\n${recordsBlock}` +
-      (invNet
-        ? `\n\n---\nPre-calculated net quantity (sum of qty for each product title; purchase + sale rows only):\n${invNet}`
-        : '');
+  let recordsSection = '';
+  if (includeRecords) {
+    const recordsBlock = formatUserRecordsForPrompt(userId, 100);
+    const invNet = formatInventoryNetByTitle(userId, 500);
+    recordsSection = recordsBlock.startsWith('No structured records')
+      ? recordsBlock
+      : `Structured records (purchases / sales / medicine — authoritative facts only from this list; do not invent rows).\n` +
+        `Rows with record type "sale (stock out)" have negative qty: subtract from inventory. Sum all qty values for the same product title (case-insensitive) to get on-hand quantity.\n` +
+        `When the user asks how many / inventory / stock, use the pre-calculated net line below if present, and match product names flexibly (e.g. "3M Dobby" vs "3m dobby").\n` +
+        `When the user asks about one fact, answer briefly. Do not paste the whole block unless they ask for the full list.\n${recordsBlock}` +
+        (invNet
+          ? `\n\n---\nPre-calculated net quantity (sum of qty for each product title; purchase + sale rows only):\n${invNet}`
+          : '');
+  }
   const system =
     `${baseSystemPrompt(userId)}\n\n---\n` +
     `This request includes prior turns of this chat (user and assistant, oldest to newest) after the system block. ` +
     `Use them for follow-ups (e.g. "share the detail list", "same month", "break that down") without asking the user to repeat the whole topic.\n\n---\n` +
-    `User memory (Soul ID):\n${memoryBlock}\n\n---\n${recordsSection}`;
+    `Keep replies concise by default (about 4-8 lines) and expand only when the user asks for details.\n\n---\n` +
+    `User memory (Soul ID):\n${memoryBlock}` +
+    (recordsSection ? `\n\n---\n${recordsSection}` : '');
 
   const messages = [{ role: 'system', content: system }];
-  const rows = listChatMessages({ userId, limit: CHAT_HISTORY_MSG_LIMIT });
+  const rows = listChatMessages({ userId, limit: pickChatHistoryLimit(userText) });
   for (const r of rows) {
     const role = String(r.role || '').toLowerCase();
     if (role === 'system') continue;
     if (role !== 'user' && role !== 'assistant') continue;
-    messages.push({ role, content: String(r.content ?? '') });
+    messages.push({ role, content: trimPromptMessageContent(r.content) });
   }
-  const trimmed = String(userText ?? '').trim();
+  const trimmed = trimPromptMessageContent(userText);
   const last = rows[rows.length - 1];
   const lastContent = last ? String(last.content ?? '').trim() : '';
   const lastRole = last ? String(last.role || '').toLowerCase() : '';
@@ -520,23 +544,7 @@ async function handleNotebook(userId, userText) {
         notes,
         meta,
       });
-      const price =
-        row.amount != null && Number.isFinite(Number(row.amount))
-          ? ` · ${row.amount}${row.currency ? ' ' + row.currency : ''}`
-          : '';
-      const when = row.occurred_on ? ` · ${row.occurred_on}` : '';
-      const qtyHint =
-        row.record_type === 'sale' && row.meta
-          ? (() => {
-              try {
-                const o = JSON.parse(row.meta);
-                return Number.isFinite(o.quantity) ? ` · qty ${o.quantity}` : '';
-              } catch {
-                return '';
-              }
-            })()
-          : '';
-      return `Saved to your table as #${row.id}: ${row.record_type} "${row.title}"${when}${price}${qtyHint}. For inventory, ask "how many X" — sales are stored as negative quantity.`;
+      return 'Saved your data.';
     } catch (e) {
       return `Could not save: ${e.message}`;
     }
@@ -624,7 +632,7 @@ export async function handleTextMessage(userId, text) {
       const reply = await handleNotebook(userId, trimmed);
       if (reply == null) {
         try {
-          const chatReply = await chat(buildMessages(userId, trimmed), { timeoutMs: 120000 });
+          const chatReply = await chat(buildMessages(userId, trimmed, { includeRecords: true }), { timeoutMs: 120000 });
           return { reply: chatReply || '(empty model response)' };
         } catch (e) {
           logger.error(`Chat error (notebook→chat): ${e.message}`);
@@ -639,7 +647,7 @@ export async function handleTextMessage(userId, text) {
   }
 
   try {
-    const reply = await chat(buildMessages(userId, trimmed), { timeoutMs: 120000 });
+    const reply = await chat(buildMessages(userId, trimmed, { includeRecords: false }), { timeoutMs: 120000 });
     return { reply: reply || '(empty model response)' };
   } catch (e) {
     logger.error(`Chat error: ${e.message}`);

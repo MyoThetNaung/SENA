@@ -477,6 +477,7 @@ const CHAT_SESSION_STORAGE_KEY = 'guiChatSessionUserId';
 /** Pixels from bottom: if user is within this, treat as "following" the thread (auto-refresh scrolls down). */
 const CHAT_STICK_BOTTOM_THRESHOLD_PX = 120;
 let lastChatLoadedUserId = null;
+let lastChatMessages = [];
 
 let syncingWebSearchInputs = false;
 let webSearchSaving = false;
@@ -2025,7 +2026,33 @@ function renderChatThread(messages, scrollOpts = {}) {
   renderChatThreadInto($('overviewChatThread'), messages, scrollOpts);
 }
 
+function setChatSendUiBusy(busy) {
+  for (const id of ['btnChatSend', 'btnOverviewChatSend']) {
+    const btn = $(id);
+    if (btn) btn.disabled = Boolean(busy);
+  }
+}
+
+function appendAndRenderChatMessage(role, content, userId, opts = {}) {
+  const nowIso = new Date().toISOString();
+  const msg = {
+    role,
+    content: String(content || ''),
+    created_at: opts.createdAt || nowIso,
+    user_id: userId,
+  };
+  const sameSession = Number(lastChatLoadedUserId) === Number(userId);
+  if (sameSession) {
+    lastChatMessages = [...lastChatMessages, msg];
+  } else {
+    lastChatMessages = [msg];
+    lastChatLoadedUserId = Number(userId);
+  }
+  renderChatThread(lastChatMessages, { forceBottom: true });
+}
+
 async function loadChat(opts = {}) {
+  if (chatSendInFlight && !opts.forceDuringSend) return;
   const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
   const limit = overviewActive ? OVERVIEW_CHAT_LIMIT : $('chatLimit')?.value || '100';
   if (!overviewActive) syncChatLimitSelects(limit);
@@ -2040,7 +2067,8 @@ async function loadChat(opts = {}) {
   q.set('userId', String(activeUid));
   const data = await fetch('/api/chat?' + q.toString()).then((r) => r.json());
   if (data.error) throw new Error(data.error);
-  renderChatThread(data.messages || [], { forceBottom });
+  lastChatMessages = Array.isArray(data.messages) ? data.messages : [];
+  renderChatThread(lastChatMessages, { forceBottom });
   lastChatLoadedUserId = activeUid;
 }
 
@@ -2056,9 +2084,11 @@ async function sendChatFromGui() {
     return;
   }
   chatSendInFlight = true;
+  setChatSendUiBusy(true);
   input.value = '';
   input.focus();
-  setStatus('Sending…', '');
+  appendAndRenderChatMessage('user', text, userId);
+  setStatus('Thinking…', '');
   try {
     const r = await fetch('/api/chat/send', {
       method: 'POST',
@@ -2067,19 +2097,30 @@ async function sendChatFromGui() {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Send failed');
-    input.value = '';
+    appendAndRenderChatMessage('assistant', String(j.reply || '(empty model response)'), userId);
     if (j.wantConfirmKeyboard) {
       logLine('Assistant asked for Yes/No — type Yes or No in the chat box.');
     }
-    setStatus('Sent.', 'ok');
-    await loadChat({ forceBottom: true });
+    const provider = String(j.meta?.provider || '').trim();
+    const model = String(j.meta?.model || '').trim();
+    const elapsedMs = Number(j.meta?.elapsedMs || 0);
+    if (provider || model || elapsedMs > 0) {
+      const bits = [];
+      if (provider) bits.push(provider);
+      if (model) bits.push(model);
+      if (elapsedMs > 0) bits.push(`${elapsedMs}ms`);
+      logLine(`Reply ready: ${bits.join(' | ')}`);
+    }
+    setStatus('', '');
+    loadChat({ forceBottom: true, forceDuringSend: true }).catch(() => {});
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Chat: ' + e.message);
     if (!input.value) input.value = text;
-    await loadChat({ forceBottom: true }).catch(() => {});
+    await loadChat({ forceBottom: true, forceDuringSend: true }).catch(() => {});
   } finally {
     chatSendInFlight = false;
+    setChatSendUiBusy(false);
     input.focus();
   }
 }

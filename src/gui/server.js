@@ -530,6 +530,7 @@ export function createGuiApp() {
     try {
       reloadConfig();
       getDb();
+      const cfg = getConfig();
       const userId = Number((req.body || {}).userId);
       const text = String((req.body || {}).text ?? '').trim();
       if (!text) {
@@ -541,14 +542,21 @@ export function createGuiApp() {
         return;
       }
       appendChatMessage(userId, 'user', text);
+      const startedAt = Date.now();
       try {
         const out = await handleTextMessage(userId, text);
         appendChatMessage(userId, 'assistant', out.reply);
         scheduleMemorySummaryRefresh(userId);
+        const elapsedMs = Date.now() - startedAt;
         res.json({
           ok: true,
           reply: out.reply,
           wantConfirmKeyboard: Boolean(out.wantConfirmKeyboard),
+          meta: {
+            elapsedMs,
+            provider: String(cfg.llmProvider || '').trim() || 'unknown',
+            model: String(cfg.llmModel || '').trim() || 'unknown',
+          },
         });
       } catch (e) {
         const errText = `Error: ${e.message}`;
