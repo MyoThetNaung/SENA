@@ -39,7 +39,7 @@ import {
   listKnownTelegramBots,
   SCOPED_USER_ID_OFFSET,
 } from '../access/telegramAccess.js';
-import { handleTextMessage } from '../core/orchestrator.js';
+import { handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
 import { GUI_CONSOLE_USER_ID } from '../const/guiSession.js';
 import { buildModelCatalog, probeLlamaServerReachable, normalizeCatalogLlmProvider } from '../llm/catalog.js';
 import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
@@ -183,7 +183,7 @@ function readSettingsForApi() {
 
 export function createGuiApp() {
   const app = express();
-  app.use(express.json({ limit: '512kb' }));
+  app.use(express.json({ limit: '12mb' }));
 
   app.use(express.static(publicDir));
 
@@ -533,18 +533,22 @@ export function createGuiApp() {
       const cfg = getConfig();
       const userId = Number((req.body || {}).userId);
       const text = String((req.body || {}).text ?? '').trim();
-      if (!text) {
-        res.status(400).json({ ok: false, error: 'Message text is required.' });
+      const imageDataUrl = String((req.body || {}).imageDataUrl ?? '').trim();
+      if (!text && !imageDataUrl) {
+        res.status(400).json({ ok: false, error: 'Message text or image is required.' });
         return;
       }
       if (!Number.isFinite(userId)) {
         res.status(400).json({ ok: false, error: 'Valid userId is required.' });
         return;
       }
-      appendChatMessage(userId, 'user', text);
+      const userPreview = text || '[image]';
+      appendChatMessage(userId, 'user', userPreview);
       const startedAt = Date.now();
       try {
-        const out = await handleTextMessage(userId, text);
+        const out = imageDataUrl
+          ? await handleImageMessage(userId, text, imageDataUrl)
+          : await handleTextMessage(userId, text);
         appendChatMessage(userId, 'assistant', out.reply);
         scheduleMemorySummaryRefresh(userId);
         const elapsedMs = Date.now() - startedAt;

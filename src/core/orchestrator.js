@@ -227,6 +227,27 @@ function buildMessages(userId, userText, options = {}) {
   return messages;
 }
 
+function buildMessagesWithImage(userId, userText, imageDataUrl, options = {}) {
+  const text = String(userText || '').trim() || 'Describe this image briefly.';
+  const msgs = buildMessages(userId, text, options);
+  const last = msgs[msgs.length - 1];
+  if (last && last.role === 'user') {
+    last.content = [
+      { type: 'text', text },
+      { type: 'image_url', image_url: { url: imageDataUrl } },
+    ];
+  } else {
+    msgs.push({
+      role: 'user',
+      content: [
+        { type: 'text', text },
+        { type: 'image_url', image_url: { url: imageDataUrl } },
+      ],
+    });
+  }
+  return msgs;
+}
+
 /** Multi-line Mon–Sun style schedule → many calendar events (not single parseCalendarRequest). */
 function shouldTryBulkCalendarSchedule(text) {
   const raw = String(text || '').trim();
@@ -652,6 +673,38 @@ export async function handleTextMessage(userId, text) {
   } catch (e) {
     logger.error(`Chat error: ${e.message}`);
     return { reply: `Model error: ${e.message}` };
+  }
+}
+
+export async function handleImageMessage(userId, text, imageDataUrl) {
+  const cfg = getConfig();
+  if (cfg.llmProvider !== 'llama-server') {
+    return {
+      reply:
+        'Image input is currently enabled only for llama.cpp server backend in this app. Switch backend to llama-server, then try again.',
+    };
+  }
+  const img = String(imageDataUrl || '').trim();
+  if (!/^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i.test(img)) {
+    return { reply: 'Invalid image payload. Please send a valid image file.' };
+  }
+  ensureSoul(userId);
+  try {
+    const reply = await chat(buildMessagesWithImage(userId, text, img, { includeRecords: false }), {
+      timeoutMs: 120000,
+    });
+    return { reply: reply || '(empty model response)' };
+  } catch (e) {
+    const msg = String(e?.message || '');
+    logger.error(`Image chat error: ${msg}`);
+    if (/image input is not supported|mmproj/i.test(msg)) {
+      return {
+        reply:
+          'Model error: image input is not enabled on the running llama-server instance. ' +
+          'Place `mmproj*.gguf` in your models folder, then restart llama-server from the Control Panel (Stop server -> Start server) and retry.',
+      };
+    }
+    return { reply: `Model error: ${msg}` };
   }
 }
 

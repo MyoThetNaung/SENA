@@ -443,12 +443,16 @@
               <div id="overviewChatThread" class="chat-thread chat-messenger-thread" aria-live="polite"></div>
               <div class="chat-messenger-compose">
                 <div class="chat-messenger-input-place">
+                  <input id="overviewChatImageInput" type="file" accept="image/*" class="hidden" />
                   <textarea
                     id="overviewChatInput"
                     class="chat-messenger-input"
                     rows="2"
                     placeholder="Type a message… (Enter to send, Shift+Enter newline)"
                   ></textarea>
+                  <button type="button" id="btnOverviewChatImage" class="chat-messenger-send" aria-label="Attach image">
+                    IMG
+                  </button>
                   <button type="button" id="btnOverviewChatSend" class="chat-messenger-send" aria-label="Send">
                     <svg
                       class="chat-messenger-send-icon"
@@ -930,12 +934,14 @@
               <div id="chatThread" class="chat-thread chat-messenger-thread" aria-live="polite"></div>
               <div class="chat-messenger-compose">
                 <div class="chat-messenger-input-place">
+                  <input id="chatImageInput" type="file" accept="image/*" class="hidden" />
                   <textarea
                     id="chatInput"
                     class="chat-messenger-input"
                     rows="2"
                     placeholder="Type a message… (Enter to send, Shift+Enter newline)"
                   ></textarea>
+                  <button type="button" id="btnChatImage" class="chat-messenger-send" aria-label="Attach image">IMG</button>
                   <button type="button" id="btnChatSend" class="chat-messenger-send" aria-label="Send">
                     <svg
                       class="chat-messenger-send-icon"

@@ -2,7 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { resolveScopedTelegramUserId, touchTelegramUser } from '../access/telegramAccess.js';
 import { appendChatMessage } from '../chat/chatLog.js';
 import { getConfig } from '../config.js';
-import { handleConfirmCallback, handleTextMessage } from '../core/orchestrator.js';
+import { handleConfirmCallback, handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { logger } from '../logger.js';
 
@@ -30,6 +30,14 @@ function telegramErrorHint(err) {
     return ' Check network/DNS/firewall — the app must reach https://api.telegram.org';
   }
   return '';
+}
+
+function mimeFromTelegramPath(filePath) {
+  const p = String(filePath || '').toLowerCase();
+  if (p.endsWith('.png')) return 'image/png';
+  if (p.endsWith('.webp')) return 'image/webp';
+  if (p.endsWith('.gif')) return 'image/gif';
+  return 'image/jpeg';
 }
 
 export async function createBot(token, index = 0) {
@@ -79,8 +87,41 @@ export async function createBot(token, index = 0) {
       return;
     }
 
+    if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+      try {
+        const largest = msg.photo[msg.photo.length - 1];
+        const fileSize = Number(largest?.file_size || 0);
+        if (fileSize > 6 * 1024 * 1024) {
+          await bot.sendMessage(chatId, 'Image is too large. Please send an image under 6 MB.');
+          return;
+        }
+        const fileUrl = await bot.getFileLink(largest.file_id);
+        const imageRes = await fetch(fileUrl);
+        if (!imageRes.ok) {
+          await bot.sendMessage(chatId, `Could not download image (HTTP ${imageRes.status}).`);
+          return;
+        }
+        const buf = Buffer.from(await imageRes.arrayBuffer());
+        const imageDataUrl = `data:${mimeFromTelegramPath(largest.file_path)};base64,${buf.toString('base64')}`;
+        const caption = String(msg.caption || '').trim();
+        const userText = caption || '[photo]';
+        appendChatMessage(userId, 'user', userText);
+        await bot.sendChatAction(chatId, 'typing');
+        const out = await handleImageMessage(userId, caption, imageDataUrl);
+        await bot.sendMessage(chatId, out.reply);
+        appendChatMessage(userId, 'assistant', out.reply);
+        scheduleMemorySummaryRefresh(userId);
+      } catch (e) {
+        logger.error(`photo handler: ${e.message}`);
+        const errText = `Error: ${e.message}`;
+        appendChatMessage(userId, 'assistant', errText);
+        await bot.sendMessage(chatId, errText).catch(() => {});
+      }
+      return;
+    }
+
     if (!msg.text) {
-      await bot.sendMessage(chatId, 'Please send text messages only.');
+      await bot.sendMessage(chatId, 'Please send text or photo messages only.');
       return;
     }
 

@@ -81,6 +81,11 @@ let lastConsoleStatusSignature = '';
 let lastGuiConsoleUserId = 900000001;
 const OVERVIEW_CHAT_LIMIT = '50';
 let chatSendInFlight = false;
+const MAX_CHAT_IMAGE_BYTES = 6 * 1024 * 1024;
+const pendingChatImageByPane = {
+  overview: null,
+  chat: null,
+};
 
 async function refreshConsoleStatusLine() {
   try {
@@ -1936,6 +1941,29 @@ function getActiveChatInputEl() {
   return $('chatInput') || $('overviewChatInput');
 }
 
+function activeChatPaneKey() {
+  return Boolean(document.getElementById('panel-overview')?.classList.contains('active')) ? 'overview' : 'chat';
+}
+
+function getActivePendingChatImage() {
+  return pendingChatImageByPane[activeChatPaneKey()];
+}
+
+function setPendingChatImageForPane(pane, payload) {
+  pendingChatImageByPane[pane] = payload || null;
+  const line = payload ? `Attached image: ${payload.name}` : 'Image attachment cleared.';
+  logLine(line);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('Could not read selected image file.'));
+    fr.onload = () => resolve(String(fr.result || ''));
+    fr.readAsDataURL(file);
+  });
+}
+
 function syncChatLimitSelects(value) {
   for (const id of ['chatLimit']) {
     const el = $(id);
@@ -2077,7 +2105,8 @@ async function sendChatFromGui() {
   const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
   const input = getActiveChatInputEl();
   const text = (input?.value || '').trim();
-  if (!text) return;
+  const image = getActivePendingChatImage();
+  if (!text && !image) return;
   const userId = overviewActive ? lastGuiConsoleUserId : Number(getActiveChatSelect()?.value);
   if (!Number.isFinite(userId)) {
     setStatus('Chat session is unavailable.', 'err');
@@ -2085,15 +2114,18 @@ async function sendChatFromGui() {
   }
   chatSendInFlight = true;
   setChatSendUiBusy(true);
+  const paneKey = activeChatPaneKey();
   input.value = '';
   input.focus();
-  appendAndRenderChatMessage('user', text, userId);
+  setPendingChatImageForPane(paneKey, null);
+  const userPreview = [text, image ? '[Image attached]' : ''].filter(Boolean).join('\n');
+  appendAndRenderChatMessage('user', userPreview || '[Image]', userId);
   setStatus('Thinking…', '');
   try {
     const r = await fetch('/api/chat/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, text }),
+      body: JSON.stringify({ userId, text, imageDataUrl: image?.dataUrl || '' }),
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Send failed');
@@ -2117,6 +2149,7 @@ async function sendChatFromGui() {
     setStatus(e.message, 'err');
     logLine('Chat: ' + e.message);
     if (!input.value) input.value = text;
+    if (image && !pendingChatImageByPane[paneKey]) setPendingChatImageForPane(paneKey, image);
     await loadChat({ forceBottom: true, forceDuringSend: true }).catch(() => {});
   } finally {
     chatSendInFlight = false;
@@ -2951,6 +2984,33 @@ for (const id of ['chatSessionSelect']) {
 }
 for (const id of ['btnChatSend', 'btnOverviewChatSend']) {
   $(id)?.addEventListener('click', () => sendChatFromGui().catch(() => {}));
+}
+for (const [btnId, inputId, pane] of [
+  ['btnChatImage', 'chatImageInput', 'chat'],
+  ['btnOverviewChatImage', 'overviewChatImageInput', 'overview'],
+]) {
+  $(btnId)?.addEventListener('click', () => $(inputId)?.click());
+  $(inputId)?.addEventListener('change', async (ev) => {
+    const file = ev.target?.files?.[0];
+    if (!file) return;
+    try {
+      if (!String(file.type || '').startsWith('image/')) throw new Error('Please select an image file.');
+      if (Number(file.size || 0) > MAX_CHAT_IMAGE_BYTES) {
+        throw new Error('Image is too large. Please choose a file under 6 MB.');
+      }
+      const dataUrl = await readFileAsDataUrl(file);
+      setPendingChatImageForPane(pane, {
+        name: String(file.name || 'image'),
+        type: String(file.type || 'image/jpeg'),
+        dataUrl,
+      });
+      setStatus('Image attached. Add optional text and press send.', '');
+    } catch (e) {
+      setStatus(e.message, 'err');
+    } finally {
+      ev.target.value = '';
+    }
+  });
 }
 for (const id of ['chatInput', 'overviewChatInput']) {
   $(id)?.addEventListener('keydown', (ev) => {

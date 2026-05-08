@@ -10,6 +10,7 @@ let child = null;
 let weStarted = false;
 /** Full path of GGUF this app loaded (llama-server only loads one model per process). */
 let lastSpawnedGgufPath = null;
+let lastSpawnedMmprojPath = null;
 
 function resolveBinary(engineDir) {
   const win = process.platform === 'win32';
@@ -36,6 +37,24 @@ export function resolveGgufPath(modelsDir, modelName) {
     return path.join(modelsDir, files[0]);
   }
   return null;
+}
+
+/** Find vision projection file for multimodal models (mmproj*.gguf). */
+export function resolveMmprojPath(modelsDir, modelPath) {
+  if (!fs.existsSync(modelsDir)) return null;
+  const files = fs.readdirSync(modelsDir).filter((f) => f.toLowerCase().endsWith('.gguf'));
+  if (!files.length) return null;
+  const modelBase = path.basename(String(modelPath || '')).toLowerCase();
+  const mmprojFiles = files.filter((f) => /mmproj/i.test(f));
+  if (!mmprojFiles.length) return null;
+  const near = mmprojFiles.find((f) => {
+    const s = f.toLowerCase();
+    if (modelBase.includes('gemma-4') && s.includes('gemma-4')) return true;
+    if (modelBase.includes('qwen') && s.includes('qwen')) return true;
+    if (modelBase.includes('llava') && s.includes('llava')) return true;
+    return false;
+  });
+  return path.join(modelsDir, near || mmprojFiles[0]);
 }
 
 function parseServerUrl(urlStr) {
@@ -107,12 +126,13 @@ export async function startLlamaServerIfConfigured(force = false) {
     );
     return { ok: false, error: 'No GGUF file found for the selected model' };
   }
+  const mmproj = resolveMmprojPath(c.modelsDir, gguf);
 
   const { host, port } = parseServerUrl(c.llamaServerUrl);
   const url = c.llamaServerUrl.replace(/\/$/, '');
 
   if (child && weStarted) {
-    if (lastSpawnedGgufPath === gguf) {
+    if (lastSpawnedGgufPath === gguf && lastSpawnedMmprojPath === mmproj) {
       logger.info(`llama-server already running with selected model (${path.basename(gguf)})`);
       return { ok: true, skipped: false };
     }
@@ -141,9 +161,12 @@ export async function startLlamaServerIfConfigured(force = false) {
 
   logger.info(`Starting llama-server: ${exe}`);
   logger.info(`  model ${gguf}`);
+  if (mmproj) logger.info(`  mmproj ${mmproj}`);
+  else logger.warn('  mmproj not found in models folder; image input will not work for multimodal prompts.');
   logger.info(`  ${host}:${port}`);
-
-  child = spawn(exe, ['-m', gguf, '--host', host, '--port', port], {
+  const args = ['-m', gguf, '--host', host, '--port', port, '--jinja'];
+  if (mmproj) args.push('--mmproj', mmproj);
+  child = spawn(exe, args, {
     cwd: path.dirname(exe),
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -168,11 +191,13 @@ export async function startLlamaServerIfConfigured(force = false) {
     child = null;
     weStarted = false;
     lastSpawnedGgufPath = null;
+    lastSpawnedMmprojPath = null;
   });
 
   try {
     await waitForTcpPort(host, port);
     lastSpawnedGgufPath = gguf;
+    lastSpawnedMmprojPath = mmproj;
     logger.info('llama-server is listening.');
     return { ok: true, skipped: false };
   } catch (e) {
@@ -185,6 +210,7 @@ export async function startLlamaServerIfConfigured(force = false) {
     child = null;
     weStarted = false;
     lastSpawnedGgufPath = null;
+    lastSpawnedMmprojPath = null;
     return { ok: false, error: e.message };
   }
 }
@@ -204,6 +230,7 @@ export async function stopLlamaServerIfWeStarted() {
   child = null;
   weStarted = false;
   lastSpawnedGgufPath = null;
+  lastSpawnedMmprojPath = null;
 }
 
 export function llamaProcessRunning() {
