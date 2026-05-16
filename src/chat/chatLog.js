@@ -1,5 +1,5 @@
-import { getDb } from '../db.js';
-import { sqliteUtcStringToIsoZ } from '../util/sqliteUtc.js';
+import { query } from '../db.js';
+import { rowTimestampToIsoZ } from '../util/dbTime.js';
 
 const MAX_LEN = 50000;
 
@@ -8,86 +8,70 @@ function trim(s) {
   return t.length > MAX_LEN ? `${t.slice(0, MAX_LEN)}…` : t;
 }
 
-export function appendChatMessage(userId, role, content) {
+export async function appendChatMessage(userId, role, content) {
   const r = String(role).toLowerCase();
   if (r !== 'user' && r !== 'assistant' && r !== 'system') return;
-  const db = getDb();
   const createdAt = new Date().toISOString();
-  db.prepare('INSERT INTO chat_log (user_id, role, content, created_at) VALUES (?, ?, ?, ?)').run(
-    userId,
-    r,
-    trim(content),
-    createdAt
+  await query(
+    'INSERT INTO chat_log (user_id, role, content, created_at) VALUES ($1, $2, $3, $4::timestamptz)',
+    [userId, r, trim(content), createdAt]
   );
 }
 
 function mapChatRow(row) {
   return {
     ...row,
-    created_at: sqliteUtcStringToIsoZ(row.created_at),
+    created_at: rowTimestampToIsoZ(row.created_at),
   };
 }
 
-export function listChatMessages({ userId = null, limit = 100 } = {}) {
-  const db = getDb();
+export async function listChatMessages({ userId = null, limit = 100 } = {}) {
   const lim = Math.min(500, Math.max(1, Number(limit) || 100));
+  let rows;
   if (userId != null && Number.isFinite(Number(userId))) {
-    return db
-      .prepare(
-        `SELECT id, user_id, role, content, created_at FROM chat_log
-
-       WHERE user_id = ?
-
-       ORDER BY id DESC
-
-       LIMIT ?`
-      )
-      .all(Number(userId), lim)
-      .reverse()
-      .map(mapChatRow);
-  }
-  return db
-    .prepare(
+    const r = await query(
       `SELECT id, user_id, role, content, created_at FROM chat_log
-
-     ORDER BY id DESC
-
-     LIMIT ?`
-    )
-    .all(lim)
-    .reverse()
-    .map(mapChatRow);
+       WHERE user_id = $1
+       ORDER BY id DESC
+       LIMIT $2`,
+      [Number(userId), lim]
+    );
+    rows = r.rows;
+  } else {
+    const r = await query(
+      `SELECT id, user_id, role, content, created_at FROM chat_log
+       ORDER BY id DESC
+       LIMIT $1`,
+      [lim]
+    );
+    rows = r.rows;
+  }
+  return [...rows].reverse().map(mapChatRow);
 }
 
-export function listChatUserIds() {
-  const db = getDb();
-  const rows = db.prepare(`SELECT DISTINCT user_id FROM chat_log ORDER BY user_id`).all();
-
-  return rows.map((x) => x.user_id);
+export async function listChatUserIds() {
+  const r = await query(`SELECT DISTINCT user_id FROM chat_log ORDER BY user_id`);
+  return r.rows.map((x) => Number(x.user_id));
 }
 
 /** Sessions with last activity, newest first. */
-export function listChatSessions() {
-  const db = getDb();
-  const rows = db
-    .prepare(
-      `SELECT user_id, MAX(created_at) AS last_at
-       FROM chat_log
-       GROUP BY user_id
-       ORDER BY last_at DESC`
-    )
-    .all();
-  return rows.map((r) => ({
-    userId: r.user_id,
-    lastAt: r.last_at != null ? sqliteUtcStringToIsoZ(r.last_at) : r.last_at,
+export async function listChatSessions() {
+  const r = await query(
+    `SELECT user_id, MAX(created_at) AS last_at
+     FROM chat_log
+     GROUP BY user_id
+     ORDER BY last_at DESC`
+  );
+  return r.rows.map((row) => ({
+    userId: Number(row.user_id),
+    lastAt: row.last_at != null ? rowTimestampToIsoZ(row.last_at) : row.last_at,
   }));
 }
 
 /** Remove all chat rows for one session user id. */
-export function clearChatMessagesForUser(userId) {
+export async function clearChatMessagesForUser(userId) {
   const uid = Number(userId);
   if (!Number.isFinite(uid)) throw new Error('Invalid userId');
-  const db = getDb();
-  const out = db.prepare('DELETE FROM chat_log WHERE user_id = ?').run(uid);
-  return Number(out.changes || 0);
+  const r = await query('DELETE FROM chat_log WHERE user_id = $1', [uid]);
+  return Number(r.rowCount || 0);
 }

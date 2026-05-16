@@ -1,5 +1,6 @@
 import { addEvent, getTodayEvents, getUpcomingEvents, getEventsForLocalDate } from '../calendar/calendar.js';
-import { resolveEventStartsAt, getCalendarClockContext } from '../calendar/resolveStartsAt.js';
+import { resolveEventStartsAt } from '../calendar/resolveStartsAt.js';
+import { getClockContextForUser } from '../memory/soul.js';
 import {
   chat,
   parseCalendarRequest,
@@ -116,7 +117,7 @@ async function tryBulkSavePurchases(userId, userText) {
   if (!shouldTryBulkImport(userText)) return null;
   let parsed;
   try {
-    parsed = await parseBulkPurchaseLines(userText);
+    parsed = await parseBulkPurchaseLines(userText, await getClockContextForUser(userId));
   } catch (e) {
     logger.warn(`parseBulkPurchaseLines: ${e.message}`);
     return null;
@@ -125,10 +126,10 @@ async function tryBulkSavePurchases(userId, userText) {
   if (!Array.isArray(items) || items.length < 1) return null;
   const lineCount = userText.split(/\r?\n/).filter((l) => l.trim()).length;
   if (items.length < 2 && !(lineCount >= 12 && items.length >= 1)) return null;
-  const ck = getCalendarClockContext();
+  const ck = await getClockContextForUser(userId);
   const occurred_on = normalizeOccurredOn(parsed.occurred_on) || ck.localDateYmd;
   const currency = parsed.currency != null ? String(parsed.currency).trim().slice(0, 12) : null;
-  const { toInsert, skippedCount, totalIncoming } = partitionBulkItemsAgainstExisting(userId, items, occurred_on);
+  const { toInsert, skippedCount, totalIncoming } = await partitionBulkItemsAgainstExisting(userId, items, occurred_on);
   const verifyOnly = isBulkVerifyOnlyRequest(userText);
 
   if (verifyOnly) {
@@ -148,7 +149,7 @@ async function tryBulkSavePurchases(userId, userText) {
 
   let result;
   try {
-    result = bulkAddPurchaseLines(userId, {
+    result = await bulkAddPurchaseLines(userId, {
       occurred_on,
       currency,
       items: toInsert,
@@ -183,14 +184,14 @@ function trimPromptMessageContent(raw) {
   return `${text.slice(0, HISTORY_MSG_CHAR_LIMIT)}\n...[trimmed for context window]`;
 }
 
-function buildMessages(userId, userText, options = {}) {
+async function buildMessages(userId, userText, options = {}) {
   const includeRecords = options.includeRecords !== false;
-  const soul = getSoul(userId);
+  const soul = await getSoul(userId);
   const memoryBlock = formatSoulForPrompt(soul);
   let recordsSection = '';
   if (includeRecords) {
-    const recordsBlock = formatUserRecordsForPrompt(userId, 100);
-    const invNet = formatInventoryNetByTitle(userId, 500);
+    const recordsBlock = await formatUserRecordsForPrompt(userId, 100);
+    const invNet = await formatInventoryNetByTitle(userId, 500);
     recordsSection = recordsBlock.startsWith('No structured records')
       ? recordsBlock
       : `Structured records (purchases / sales / medicine — authoritative facts only from this list; do not invent rows).\n` +
@@ -202,7 +203,7 @@ function buildMessages(userId, userText, options = {}) {
           : '');
   }
   const system =
-    `${baseSystemPrompt(userId)}\n\n---\n` +
+    `${await baseSystemPrompt(userId)}\n\n---\n` +
     `This request includes prior turns of this chat (user and assistant, oldest to newest) after the system block. ` +
     `Use them for follow-ups (e.g. "share the detail list", "same month", "break that down") without asking the user to repeat the whole topic.\n\n---\n` +
     `Keep replies concise by default (about 4-8 lines) and expand only when the user asks for details.\n\n---\n` +
@@ -210,7 +211,7 @@ function buildMessages(userId, userText, options = {}) {
     (recordsSection ? `\n\n---\n${recordsSection}` : '');
 
   const messages = [{ role: 'system', content: system }];
-  const rows = listChatMessages({ userId, limit: pickChatHistoryLimit(userText) });
+  const rows = await listChatMessages({ userId, limit: pickChatHistoryLimit(userText) });
   for (const r of rows) {
     const role = String(r.role || '').toLowerCase();
     if (role === 'system') continue;
@@ -227,9 +228,9 @@ function buildMessages(userId, userText, options = {}) {
   return messages;
 }
 
-function buildMessagesWithImage(userId, userText, imageDataUrl, options = {}) {
+async function buildMessagesWithImage(userId, userText, imageDataUrl, options = {}) {
   const text = String(userText || '').trim() || 'Describe this image briefly.';
-  const msgs = buildMessages(userId, text, options);
+  const msgs = await buildMessages(userId, text, options);
   const last = msgs[msgs.length - 1];
   if (last && last.role === 'user') {
     last.content = [
@@ -279,7 +280,7 @@ async function addManyCalendarEvents(userId, fullText, events) {
     }
     starts = d.toISOString();
     try {
-      const row = addEvent(userId, starts, title);
+      const row = await addEvent(userId, starts, title);
       added.push(row);
     } catch {
       failed += 1;
@@ -301,7 +302,7 @@ async function addManyCalendarEvents(userId, fullText, events) {
 async function runWebSearch(userId, query) {
   if (!getConfig().webSearchEnabled) {
     try {
-      const reply = await chat(buildMessages(userId, query), { timeoutMs: 120000 });
+      const reply = await chat(await buildMessages(userId, query), { timeoutMs: 120000 });
       return { reply: reply || '(empty model response)' };
     } catch (e) {
       logger.error(`Chat error: ${e.message}`);
@@ -394,9 +395,10 @@ function keywordCalendarSingleDayQuery(text, localDateYmd) {
 }
 
 async function handleCalendar(userId, text) {
+  const ck = await getClockContextForUser(userId);
   if (shouldTryBulkCalendarSchedule(text)) {
     try {
-      const bulk = await parseBulkCalendarSchedule(text);
+      const bulk = await parseBulkCalendarSchedule(text, ck);
       const events = Array.isArray(bulk.events) ? bulk.events : [];
       if (events.length >= 1) {
         return await addManyCalendarEvents(userId, text, events);
@@ -407,10 +409,9 @@ async function handleCalendar(userId, text) {
     }
   }
 
-  const ck = getCalendarClockContext();
   const kwDay = keywordCalendarSingleDayQuery(text, ck.localDateYmd);
   if (kwDay && normalizeOccurredOn(kwDay.onDate)) {
-    const rows = getEventsForLocalDate(userId, kwDay.onDate);
+    const rows = await getEventsForLocalDate(userId, kwDay.onDate);
     const head =
       rows.length === 0
         ? `No calendar events on ${kwDay.label} (${kwDay.onDate}).`
@@ -419,11 +420,11 @@ async function handleCalendar(userId, text) {
     return `${head}${body}`;
   }
 
-  const parsed = await parseCalendarRequest(text);
+  const parsed = await parseCalendarRequest(text, ck);
   const op = String(parsed.op || 'upcoming').toLowerCase();
 
   if (op === 'today') {
-    const rows = getTodayEvents(userId);
+    const rows = await getTodayEvents(userId);
     return `Here's your schedule today:\n${formatEvents(rows)}`;
   }
   if (op === 'day') {
@@ -437,7 +438,7 @@ async function handleCalendar(userId, text) {
       }
     }
     if (ymd) {
-      const rows = getEventsForLocalDate(userId, ymd);
+      const rows = await getEventsForLocalDate(userId, ymd);
       const head =
         rows.length === 0
           ? `No calendar events on ${ymd}.`
@@ -447,7 +448,7 @@ async function handleCalendar(userId, text) {
     }
   }
   if (op === 'upcoming' || op === 'list') {
-    const rows = getUpcomingEvents(userId);
+    const rows = await getUpcomingEvents(userId);
     return `Upcoming events:\n${formatEvents(rows)}`;
   }
   if (op === 'add') {
@@ -463,22 +464,22 @@ async function handleCalendar(userId, text) {
     }
     starts = d.toISOString();
     try {
-      const ev = addEvent(userId, starts, title);
+      const ev = await addEvent(userId, starts, title);
       const when = new Date(ev.starts_at).toLocaleString();
       return `Added: "${ev.title}" at ${when}.`;
     } catch (e) {
       return `Could not add event: ${e.message}`;
     }
   }
-  const rows = getUpcomingEvents(userId);
+  const rows = await getUpcomingEvents(userId);
   return `Upcoming events:\n${formatEvents(rows)}`;
 }
 
 async function handleNotebook(userId, userText) {
-  const ck = getCalendarClockContext();
+  const ck = await getClockContextForUser(userId);
   let parsed;
   try {
-    parsed = await parseUserRecordRequest(userText);
+    parsed = await parseUserRecordRequest(userText, ck);
   } catch (e) {
     logger.error(`parseUserRecordRequest: ${e.message}`);
     return `Could not parse that request: ${e.message}`;
@@ -492,10 +493,10 @@ async function handleNotebook(userId, userText) {
       if (m) id = Number(m[1]);
     }
     if (!Number.isFinite(id) || id < 1) {
-      const hint = formatUserRecordsReply(userId, { limit: 15, record_type: null });
+      const hint = await formatUserRecordsReply(userId, { limit: 15, record_type: null });
       return `Which row should I remove? Use the id number, e.g. "delete #12".\n\n${hint}`;
     }
-    const ok = deleteUserRecordById(userId, id);
+    const ok = await deleteUserRecordById(userId, id);
     if (!ok) return `No saved row with id ${id} for this user.`;
     return `Removed saved row #${id}.`;
   }
@@ -506,7 +507,7 @@ async function handleNotebook(userId, userText) {
     }
     const lf = String(parsed.list_filter || parsed.record_type || '').toLowerCase();
     const filter = lf === 'purchase' || lf === 'medicine' || lf === 'sale' ? lf : null;
-    return formatUserRecordsReply(userId, {
+    return await formatUserRecordsReply(userId, {
       limit: 50,
       record_type: filter,
     });
@@ -556,7 +557,7 @@ async function handleNotebook(userId, userText) {
     }
     const currency = parsed.currency != null ? String(parsed.currency).trim().slice(0, 12) : '';
     try {
-      const row = addUserRecord(userId, {
+      const row = await addUserRecord(userId, {
         record_type: rt,
         title,
         occurred_on: occurredOn,
@@ -574,40 +575,40 @@ async function handleNotebook(userId, userText) {
   if (!isExplicitSavedTableListRequest(userText)) {
     return null;
   }
-  return formatUserRecordsReply(userId, { limit: 40, record_type: null });
+  return await formatUserRecordsReply(userId, { limit: 40, record_type: null });
 }
 
 export async function handleTextMessage(userId, text) {
   const trimmed = text.trim();
   if (!trimmed) return { reply: 'Send a non-empty message.' };
 
-  ensureSoul(userId);
+  await ensureSoul(userId);
 
-  const pending = getPending(userId);
+  const pending = await getPending(userId);
   if (pending) {
     if (YES.test(trimmed)) {
       if (pending.kind === 'web_search') {
         const q = pending.payload?.query || '';
-        clearPending(userId);
+        await clearPending(userId);
         if (!q) return { reply: 'Nothing to search.' };
-        return runWebSearch(userId, q);
+        return await runWebSearch(userId, q);
       }
       if (pending.kind === 'add_event') {
         const { title, starts_at } = pending.payload || {};
-        clearPending(userId);
+        await clearPending(userId);
         try {
-          const ev = addEvent(userId, starts_at, title);
+          const ev = await addEvent(userId, starts_at, title);
           const when = new Date(ev.starts_at).toLocaleString();
           return { reply: `Added: "${ev.title}" at ${when}.` };
         } catch (e) {
           return { reply: `Could not add event: ${e.message}` };
         }
       }
-      clearPending(userId);
+      await clearPending(userId);
       return { reply: 'Confirmation cleared.' };
     }
     if (NO.test(trimmed)) {
-      clearPending(userId);
+      await clearPending(userId);
       return { reply: 'Cancelled.' };
     }
     return {
@@ -630,13 +631,13 @@ export async function handleTextMessage(userId, text) {
 
   if (intent === 'SEARCH' && getConfig().webSearchEnabled) {
     const q = trimmed.replace(/^\s*(search|look\s*up|google)\s*[:\s]*/i, '').trim() || trimmed;
-    return runWebSearch(userId, q);
+    return await runWebSearch(userId, q);
   }
 
   if (intent === 'CALENDAR') {
     try {
       const reply = await handleCalendar(userId, trimmed);
-      return { reply, wantConfirmKeyboard: getPending(userId)?.kind === 'add_event' };
+      return { reply, wantConfirmKeyboard: (await getPending(userId))?.kind === 'add_event' };
     } catch (e) {
       logger.error(`Calendar handler error: ${e.message}`);
       return { reply: `Calendar error: ${e.message}` };
@@ -653,7 +654,7 @@ export async function handleTextMessage(userId, text) {
       const reply = await handleNotebook(userId, trimmed);
       if (reply == null) {
         try {
-          const chatReply = await chat(buildMessages(userId, trimmed, { includeRecords: true }), { timeoutMs: 120000 });
+          const chatReply = await chat(await buildMessages(userId, trimmed, { includeRecords: true }), { timeoutMs: 120000 });
           return { reply: chatReply || '(empty model response)' };
         } catch (e) {
           logger.error(`Chat error (notebook→chat): ${e.message}`);
@@ -668,7 +669,7 @@ export async function handleTextMessage(userId, text) {
   }
 
   try {
-    const reply = await chat(buildMessages(userId, trimmed, { includeRecords: false }), { timeoutMs: 120000 });
+    const reply = await chat(await buildMessages(userId, trimmed, { includeRecords: false }), { timeoutMs: 120000 });
     return { reply: reply || '(empty model response)' };
   } catch (e) {
     logger.error(`Chat error: ${e.message}`);
@@ -688,9 +689,9 @@ export async function handleImageMessage(userId, text, imageDataUrl) {
   if (!/^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/i.test(img)) {
     return { reply: 'Invalid image payload. Please send a valid image file.' };
   }
-  ensureSoul(userId);
+  await ensureSoul(userId);
   try {
-    const reply = await chat(buildMessagesWithImage(userId, text, img, { includeRecords: false }), {
+    const reply = await chat(await buildMessagesWithImage(userId, text, img, { includeRecords: false }), {
       timeoutMs: 120000,
     });
     return { reply: reply || '(empty model response)' };
@@ -709,31 +710,31 @@ export async function handleImageMessage(userId, text, imageDataUrl) {
 }
 
 export async function handleConfirmCallback(userId, accepted) {
-  const pending = getPending(userId);
+  const pending = await getPending(userId);
   if (!pending) {
     return { reply: 'No pending action.' };
   }
   if (!accepted) {
-    clearPending(userId);
+    await clearPending(userId);
     return { reply: 'Cancelled.' };
   }
   if (pending.kind === 'web_search') {
     const q = pending.payload?.query || '';
-    clearPending(userId);
+    await clearPending(userId);
     if (!q) return { reply: 'Nothing to search.' };
-    return runWebSearch(userId, q);
+    return await runWebSearch(userId, q);
   }
   if (pending.kind === 'add_event') {
     const { title, starts_at } = pending.payload || {};
-    clearPending(userId);
+    await clearPending(userId);
     try {
-      const ev = addEvent(userId, starts_at, title);
+      const ev = await addEvent(userId, starts_at, title);
       const when = new Date(ev.starts_at).toLocaleString();
       return { reply: `Added: "${ev.title}" at ${when}.` };
     } catch (e) {
       return { reply: `Could not add event: ${e.message}` };
     }
   }
-  clearPending(userId);
+  await clearPending(userId);
   return { reply: 'Done.' };
 }

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+  <!-- Book cover -->
+  <path
+    d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"
+    fill="#0f172a"
+    stroke="#38bdf8"
+    stroke-width="1"
+    stroke-linejoin="round"
+  />
+  <!-- Page / spine curve -->
+  <path
+    d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"
+    fill="none"
+    stroke="#38bdf8"
+    stroke-width="1"
+    stroke-linecap="round"
+  />
+  <!-- Lines (accent — same green as overview graph) -->
+  <line x1="8" y1="7" x2="17" y2="7" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="8" y1="11" x2="15" y2="11" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/>
+</svg>

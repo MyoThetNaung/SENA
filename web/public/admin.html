@@ -1,0 +1,1260 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SENA</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Audiowide&amp;family=Open+Sans:wght@600;700&amp;display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="window-bar" aria-label="Window controls">
+      <div class="window-bar-brand" title="SENA">
+        <img
+          class="window-bar-logo"
+          src="/sena-logo.svg"
+          width="16"
+          height="16"
+          alt=""
+          decoding="async"
+        />
+        <span class="window-bar-title">SENA</span>
+      </div>
+      <div class="window-controls">
+        <button class="win-btn" id="winMinimize" type="button" aria-label="Minimize">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+        <button class="win-btn" id="winMaximize" type="button" aria-label="Maximize">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+          </svg>
+        </button>
+        <button class="win-btn close" id="winClose" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <canvas id="network" aria-hidden="true"></canvas>
+    <div class="cursor" aria-hidden="true"></div>
+    <div class="cursor-ring" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand" title="SENA (Smart Engine for Notes &amp; Action) AI Assistant">
+          <div class="brand-row">
+            <span class="brand-logo-wrap">
+              <img
+                class="brand-logo"
+                src="/sena-logo.svg"
+                width="48"
+                height="48"
+                alt=""
+                decoding="async"
+              />
+            </span>
+            <div class="brand-name audiowide-regular">SENA</div>
+          </div>
+          <div class="brand-tagline">Smart Engine for Notes &amp; Action</div>
+        </div>
+        <nav class="nav sidebar-nav-panel" id="mainNav">
+          <button type="button" class="nav-item active" data-tab="overview">
+            <img class="nav-icon" src="/nav-icons/overview.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Overview</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="engine">
+            <img class="nav-icon" src="/nav-icons/engine.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Engine &amp; models</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="data">
+            <img class="nav-icon" src="/nav-icons/memory.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Memory</span>
+          </button>
+          <button type="button" class="nav-item" data-tab="chat">
+            <img class="nav-icon" src="/nav-icons/chat.svg" width="22" height="22" alt="" />
+            <span class="nav-item-label">Chat</span>
+          </button>
+          <div class="nav-group" id="navSettingsGroup" role="group" aria-label="Settings">
+            <button
+              type="button"
+              class="nav-settings-toggle"
+              id="navSettingsToggle"
+              aria-expanded="false"
+              aria-controls="navSettingsSub"
+            >
+              <span class="nav-settings-toggle-text">
+                <img class="nav-icon" src="/nav-icons/settings.svg" width="22" height="22" alt="" />
+                Settings
+              </span>
+            </button>
+            <div class="nav-settings-sub" id="navSettingsSub">
+              <div class="nav-settings-sub-inner">
+                <button type="button" class="nav-item nav-item-sub" data-tab="telegram">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/telegram.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Telegram</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="access">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/access.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Access</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="calendar">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/calendar.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Calendar</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="pending">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/pending.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Pending</span>
+                </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="system">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/system.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">System</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="sidebar-actions">
+            <div id="sidebarAiCircleWrap" class="sidebar-ai-circle-wrap hidden" aria-hidden="true">
+              <div class="ai-circle">
+                <svg viewBox="0 0 120 120">
+                  <defs>
+                    <linearGradient id="aiCircleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stop-color="#8b5cf6" />
+                      <stop offset="100%" stop-color="#60a5fa" />
+                    </linearGradient>
+                    <linearGradient id="aiCircleGradAlt" x1="100%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="#38bdf8" />
+                      <stop offset="100%" stop-color="#a78bfa" />
+                    </linearGradient>
+                  </defs>
+                  <circle cx="60" cy="60" r="50" class="ring-bg"></circle>
+                  <circle cx="60" cy="60" r="42" class="ring-inner-bg"></circle>
+                  <circle cx="60" cy="60" r="50" class="ring-active"></circle>
+                  <circle cx="60" cy="60" r="42" class="ring-active-alt"></circle>
+                  <circle cx="60" cy="60" r="33" class="ring-scan"></circle>
+                  <circle cx="60" cy="60" r="6" class="core"></circle>
+                </svg>
+              </div>
+            </div>
+            <div class="sidebar-bot-power power-switch-wrap">
+              <div class="sidebar-bot-power-head">
+                <span class="sidebar-bot-power-title">AI assistance</span>
+                <span id="sidebarBotToggleSub" class="sidebar-bot-power-state">…</span>
+              </div>
+              <label for="inpBotPower" class="switch bot-power-switch" id="lblBotPower" aria-label="Turn AI assistance (Telegram bot) on or off">
+                <input type="checkbox" id="inpBotPower" />
+                <span>Stop</span>
+                <span>Start</span>
+              </label>
+            </div>
+            <button type="button" id="btnAdminLogout" class="btn-mini ghost sidebar-logout-btn">
+              Sign out
+            </button>
+          </div>
+          <footer class="sidebar-footer" aria-label="Credits">
+            <div class="sidebar-footer-graphic" aria-hidden="true">
+              <span class="sidebar-footer-glow"></span>
+              <span id="sidebarFooterOrnament" class="sidebar-footer-ornament"></span>
+              <span class="sidebar-footer-glow sidebar-footer-glow--flip"></span>
+            </div>
+            <p class="sidebar-footer-tag">
+              Powered By <span class="sidebar-footer-brand">SENA</span>
+            </p>
+          </footer>
+        </div>
+      </aside>
+      <main class="main">
+        <p id="status" class="statusbar" aria-live="polite"></p>
+
+        <section class="tab-panel active" id="panel-overview">
+          <h1>
+            <span>Overview</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleOverview" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleOverview">
+                <div class="neo-track">
+                  <div class="neo-background-layer"></div>
+                  <div class="neo-grid-layer"></div>
+                  <div class="neo-track-highlight"></div>
+                </div>
+                <div class="neo-thumb">
+                  <div class="neo-thumb-ring"></div>
+                  <div class="neo-thumb-core">
+                    <div class="neo-thumb-icon">
+                      <div class="neo-thumb-wave"></div>
+                      <div class="neo-thumb-pulse"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="neo-gesture-area"></div>
+                <div class="neo-interaction-feedback">
+                  <div class="neo-ripple"></div>
+                  <div class="neo-progress-arc"></div>
+                </div>
+                <div class="neo-status">
+                  <div class="neo-status-indicator">
+                    <div class="neo-status-dot"></div>
+                    <div class="neo-status-text"></div>
+                  </div>
+                </div>
+              </label>
+            </div>
+          </h1>
+
+          <div class="overview-status-grid">
+            <div class="status-card" id="overviewCardBotName">
+              <div class="status-card-label">I am</div>
+              <div id="overviewBotName" class="status-card-value status-card-value-name">…</div>
+            </div>
+
+            <div class="status-card" id="overviewCardServer">
+              <div class="status-card-head">
+                <span class="status-card-label">LLM server</span>
+                <span id="overviewServerLed" class="status-led" title="" aria-hidden="true"></span>
+              </div>
+              <div id="overviewServerLine" class="status-card-value">…</div>
+              <div id="overviewServerDetail" class="status-card-sub"></div>
+            </div>
+
+            <div class="status-card" id="overviewCardTelegram">
+              <div class="status-card-head">
+                <span class="status-card-label">AI assistance</span>
+                <span id="overviewTelegramLed" class="status-led" title="" aria-hidden="true"></span>
+              </div>
+              <div id="overviewTelegramLine" class="status-card-value">…</div>
+              <pre id="log" class="log log--mini" aria-live="polite"></pre>
+            </div>
+
+            <div class="status-card" id="overviewCardClock" title="Uses this browser’s Date — same basis as chat timestamps (toLocaleString).">
+              <div class="status-card-label">Panel time (this browser)</div>
+              <div id="overviewClockLine" class="status-card-value overview-clock-line">…</div>
+              <div id="overviewClockTz" class="status-card-sub"></div>
+            </div>
+          </div>
+
+          <div class="overview-hardware-wrap">
+            <div class="status-card" id="overviewCardHardware">
+              <div class="status-card-label">System hardware</div>
+              <div class="hardware-gauges">
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--cpu"
+                    id="overviewGaugeCpu"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="CPU usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeCpuMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">CPU</span>
+                    <span class="gauge-cores" id="overviewCpuCores">—</span>
+                    <span class="gauge-temp gauge-temp--optional" id="overviewTempCpu" hidden></span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--ram"
+                    id="overviewGaugeRam"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="RAM usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeRamMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">RAM</span>
+                    <span class="gauge-mem-detail" id="overviewRamDetail">—</span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--gpu"
+                    id="overviewGaugeGpu"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="GPU usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeGpuMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">GPU</span>
+                    <span class="gauge-temp" id="overviewTempGpu">—</span>
+                  </div>
+                </div>
+                <div class="gauge-cell">
+                  <div
+                    class="gauge gauge--vram"
+                    id="overviewGaugeVram"
+                    style="--p: 0"
+                    role="img"
+                    aria-label="VRAM usage"
+                  >
+                    <svg class="gauge-svg" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                      <circle class="gauge-track" cx="18" cy="18" r="15.9155" fill="none" stroke-width="3" />
+                      <circle
+                        class="gauge-value"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        fill="none"
+                        stroke-width="3"
+                        pathLength="100"
+                        transform="rotate(-90 18 18)"
+                      />
+                    </svg>
+                    <span class="gauge-mid" id="overviewGaugeVramMid">—</span>
+                  </div>
+                  <div class="gauge-footer">
+                    <span class="gauge-title">VRAM</span>
+                    <span class="gauge-vram-detail" id="overviewVramDetail">—</span>
+                  </div>
+                </div>
+              </div>
+              <div class="hardware-usage-charts" aria-label="CPU, RAM, and GPU usage over time">
+                <div class="usage-chart">
+                  <span class="usage-chart-label">CPU %</span>
+                  <canvas id="overviewChartCpu" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+                <div class="usage-chart">
+                  <span class="usage-chart-label">RAM %</span>
+                  <canvas id="overviewChartRam" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+                <div class="usage-chart">
+                  <span class="usage-chart-label">GPU %</span>
+                  <canvas id="overviewChartGpu" class="usage-chart-canvas" width="400" height="72"></canvas>
+                </div>
+              </div>
+              <p id="overviewHwMeta" class="hint hardware-meta"></p>
+            </div>
+          </div>
+
+          <div class="overview-engine-strip">
+            <div class="status-card status-card--compact">
+              <div class="status-card-label">LLM backend</div>
+              <div id="overviewLlmBackend" class="status-card-value">…</div>
+            </div>
+            <div class="status-card status-card--compact" id="overviewCardActiveModel">
+              <div class="status-card-label">Active model</div>
+              <div id="overviewActiveModel" class="status-card-value">…</div>
+            </div>
+            <div class="status-card status-card--compact hidden" id="overviewCardGeneratedTokens">
+              <div class="status-card-label">Generated tokens</div>
+              <div id="overviewGeneratedTokens" class="status-card-value">—</div>
+            </div>
+            <div class="status-card status-card--compact hidden" id="overviewCardGenerationTime">
+              <div class="status-card-label">Generation time</div>
+              <div id="overviewGenerationTime" class="status-card-value">—</div>
+            </div>
+            <div class="status-card status-card--compact hidden" id="overviewCardGenerationSpeed">
+              <div class="status-card-label">Generation speed</div>
+              <div id="overviewGenerationSpeed" class="status-card-value">—</div>
+            </div>
+            <div class="status-card status-card--compact status-card--websearch" id="overviewCardWebSearch">
+              <div class="status-card-label">Web search</div>
+              <div class="toggle-row toggle-row--neo">
+                <span class="toggle-row-text">DuckDuckGo</span>
+                <div class="neo-toggle-container" title="Saved in data/settings.json">
+                  <input
+                    class="neo-toggle-input"
+                    id="overviewWebSearch"
+                    type="checkbox"
+                    aria-label="Web search (DuckDuckGo)"
+                  />
+                  <label class="neo-toggle" for="overviewWebSearch">
+                    <div class="neo-track">
+                      <div class="neo-background-layer"></div>
+                      <div class="neo-grid-layer"></div>
+                      <div class="neo-track-highlight"></div>
+                    </div>
+                    <div class="neo-thumb">
+                      <div class="neo-thumb-ring"></div>
+                      <div class="neo-thumb-core">
+                        <div class="neo-thumb-icon">
+                          <div class="neo-thumb-wave"></div>
+                          <div class="neo-thumb-pulse"></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="neo-gesture-area"></div>
+                    <div class="neo-interaction-feedback">
+                      <div class="neo-ripple"></div>
+                      <div class="neo-progress-arc"></div>
+                    </div>
+                    <div class="neo-status">
+                      <div class="neo-status-indicator">
+                        <div class="neo-status-dot"></div>
+                        <div class="neo-status-text"></div>
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card chat-console chat-console--overview">
+            <div class="chat-messenger">
+              <div id="overviewChatThread" class="chat-thread chat-messenger-thread" aria-live="polite"></div>
+              <div class="chat-messenger-compose">
+                <div class="chat-messenger-input-place">
+                  <input id="overviewChatImageInput" type="file" accept="image/*" class="hidden" />
+                  <textarea
+                    id="overviewChatInput"
+                    class="chat-messenger-input"
+                    rows="2"
+                    placeholder="Type a message… (Enter to send, Shift+Enter newline)"
+                  ></textarea>
+                  <button type="button" id="btnOverviewChatImage" class="chat-messenger-send" aria-label="Attach image">
+                    IMG
+                  </button>
+                  <button type="button" id="btnOverviewChatSend" class="chat-messenger-send" aria-label="Send">
+                    <svg
+                      class="chat-messenger-send-icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 512 512"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M481.508,210.336L68.414,38.926c-17.403-7.222-37.064-4.045-51.309,8.287C2.86,59.547-3.098,78.551,1.558,96.808 L38.327,241h180.026c8.284,0,15.001,6.716,15.001,15.001c0,8.284-6.716,15.001-15.001,15.001H38.327L1.558,415.193 c-4.656,18.258,1.301,37.262,15.547,49.595c14.274,12.357,33.937,15.495,51.31,8.287l413.094-171.409 C500.317,293.862,512,276.364,512,256.001C512,235.638,500.317,218.139,481.508,210.336z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-engine">
+          <h1>
+            <span>Engine &amp; models</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleEngine" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleEngine">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <div class="card">
+            <h2>Backend</h2>
+            <p class="lead">
+              Choose <strong>Ollama</strong>, the <strong>llama.cpp</strong> server backend, or a cloud provider
+              (<strong>OpenAI</strong> or <strong>Google Gemini</strong>) with an API key. Whenever you change the
+              <strong>LLM backend</strong> or the <strong>active model</strong>, click <strong>Save settings</strong> so
+              the configuration is persisted and applied consistently.
+            </p>
+            <label>LLM backend</label>
+            <select id="llmProvider">
+              <option value="llama-server">llama.cpp server — local OpenAI-compatible API</option>
+              <option value="ollama">Ollama (local)</option>
+              <option value="openai">OpenAI — ChatGPT API (cloud)</option>
+              <option value="openrouter">OpenRouter API (cloud)</option>
+              <option value="gemini">Google Gemini API (cloud)</option>
+            </select>
+
+            <div id="wrapOpenAi" class="hidden">
+              <label>OpenAI API key (<a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">get a key</a>)</label>
+              <input type="password" id="openaiApiKey" autocomplete="off" />
+              <p class="hint" id="openaiKeyHint"></p>
+            </div>
+            <div id="wrapGemini" class="hidden">
+              <label>Gemini API key (<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>)</label>
+              <input type="password" id="geminiApiKey" autocomplete="off" />
+              <p class="hint" id="geminiKeyHint"></p>
+            </div>
+            <div id="wrapOpenRouter" class="hidden">
+              <label>OpenRouter API key (<a href="https://openrouter.ai/keys" target="_blank" rel="noopener">get a key</a>)</label>
+              <input type="password" id="openrouterApiKey" autocomplete="off" />
+              <p class="hint" id="openrouterKeyHint"></p>
+              <label>OpenRouter base URL</label>
+              <input type="text" id="openrouterBaseUrl" placeholder="https://openrouter.ai/api/v1" />
+            </div>
+
+            <div id="wrapOllama">
+              <label>Ollama base URL</label>
+              <input type="text" id="ollamaBaseUrl" />
+            </div>
+            <div id="wrapLlama" class="hidden">
+              <label>llama.cpp connection</label>
+              <select id="llamaServerMode">
+                <option value="local">Local — embedded llama-server on this machine</option>
+                <option value="remote">Remote / online — existing llama.cpp server URL</option>
+              </select>
+              <label>Server base URL</label>
+              <input
+                type="text"
+                id="llamaServerUrl"
+                placeholder="http://127.0.0.1:8080 or https://your-host.example.com"
+              />
+              <div id="wrapLlamaRemoteAuth" class="hidden">
+                <label>API key (optional)</label>
+                <input
+                  type="password"
+                  id="llamaServerApiKey"
+                  autocomplete="off"
+                  placeholder="Bearer token if your host requires auth"
+                />
+                <p class="hint" id="llamaServerApiKeyHint"></p>
+              </div>
+              <div id="wrapLlamaRemoteModels" class="hidden">
+                <label>Active model (from server)</label>
+                <div class="row">
+                  <select id="llmModelRemote" class="llm-model-select"></select>
+                  <button type="button" id="btnRefreshRemoteModels" class="primary ghost">Refresh</button>
+                </div>
+                <p class="hint" id="llamaRemoteModelsHint">
+                  Models are loaded from the remote server <code>/v1/models</code> endpoint.
+                </p>
+              </div>
+            </div>
+            <div id="localLlmActions" class="row">
+              <button type="button" id="btnTestLocalLlm" class="primary ghost">Test Connection</button>
+              <button type="button" id="btnStartEmbeddedServer" class="primary ghost hidden">Start Embedded Server</button>
+            </div>
+            <p id="localLlmTestHint" class="hint">
+              For local backends, test the current base URL before saving.
+            </p>
+
+            <div id="wrapLlamaLocalModels">
+              <div class="embedded-server-panel" id="embeddedServerPanel">
+                <div class="embedded-status-row">
+                  <span class="embedded-status-label">Embedded llama-server</span>
+                  <span
+                    id="embeddedServerStatusBadge"
+                    class="embedded-status-badge embedded-status--offline"
+                    role="status"
+                    >Offline</span>
+                </div>
+                <p class="hint embedded-status-hint" id="embeddedServerStatusDetail"></p>
+              </div>
+              <label>Main model (.gguf) — full file path</label>
+              <div class="row">
+                <button type="button" id="btnPickGgufFile" class="primary ghost">Choose file…</button>
+              </div>
+              <input
+                type="text"
+                class="mono-path-readout"
+                id="displayMainModelPath"
+                value=""
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="/absolute/path/to/model.gguf — use Choose file… or paste a path"
+                title="Full path to the main GGUF weights (editable)"
+              />
+              <p class="hint" id="selectedGgufLabel">No local model file selected yet.</p>
+              <label>Multimodal projector (optional — .mmproj or mmproj .gguf) — full file path</label>
+              <div class="row">
+                <button type="button" id="btnPickMmprojFile" class="primary ghost">Choose file…</button>
+                <button type="button" id="btnClearMmproj" class="primary ghost">Clear</button>
+              </div>
+              <input
+                type="text"
+                class="mono-path-readout"
+                id="displayMmprojPath"
+                value=""
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="/absolute/path/to/mmproj.mmproj — optional, for vision models"
+                title="Full path to the vision projector file (editable)"
+              />
+              <p class="hint" id="selectedMmprojLabel">None — add an mmproj .gguf for multimodal (images).</p>
+              <select id="llmModel" hidden></select>
+              <input type="hidden" id="modelsDir" />
+              <input type="hidden" id="ggufPath" />
+              <input type="hidden" id="mmprojPath" />
+            </div>
+            <div class="engine-save-actions">
+              <button type="button" id="btnSave">Save settings</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-telegram">
+          <h1>
+            <span>Telegram</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleTelegram" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleTelegram">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <div class="card">
+            <label>Add bot token</label>
+            <div class="telegram-token-row">
+              <input type="password" id="telegramBotToken" autocomplete="off" />
+              <button
+                type="button"
+                id="btnTelegramTokenDone"
+                class="telegram-token-done"
+                aria-label="Save bot token"
+                title="Save token"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M20 6L9 17l-5-5" />
+                </svg>
+              </button>
+            </div>
+            <p class="hint">You can connect multiple bots. Add one token at a time.</p>
+            <label>Connected bot APIs (masked first 4 / last 4)</label>
+            <div id="telegramTokenList" class="telegram-token-list"></div>
+            <p class="hint" id="tokenHint"></p>
+            <button type="button" id="btnResetTelegram" class="danger ghost wide">Reset Telegram setup</button>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-access">
+          <h1>
+            <span>Who can use the bot</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleAccess" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleAccess">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <p class="lead">
+            Invite users by <strong>Google email</strong> for web sign-in, and/or by Telegram <strong>@username</strong>
+            (or numeric user id) for the bot. They can only sign in after you add them here.
+          </p>
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Invite user</h2>
+            <label>Google email (web login)</label>
+            <input type="email" id="inviteEmail" class="input" placeholder="user@example.com" />
+            <label>Telegram @username (bot)</label>
+            <input type="text" id="inviteUsername" class="input" placeholder="username without @" />
+            <label>Telegram user id (optional)</label>
+            <input type="text" id="inviteTelegramId" class="input" placeholder="e.g. 123456789" />
+            <label>Notes (optional)</label>
+            <input type="text" id="inviteNotes" class="input" />
+            <button type="button" id="btnInviteUser" class="primary" style="margin-top: 0.75rem">Add invite</button>
+          </div>
+          <div class="toolbar">
+            <button type="button" id="btnRefreshAccess" class="primary ghost">Refresh</button>
+            <button type="button" id="btnClearAccessAll" class="danger ghost">Clear all invites</button>
+            <a href="/login" class="btn-mini ghost">User login</a>
+          </div>
+          <h2>Invited (not signed in yet)</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th>Name</th>
+                  <th>First message</th>
+                  <th>Since</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessPendingBody"></tbody>
+            </table>
+          </div>
+          <h2>Active</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th>Last seen</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessApprovedBody"></tbody>
+            </table>
+          </div>
+          <h2>Disabled</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="accessBlockedBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-data">
+          <h1>
+            <span>Memory &amp; bot persona</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleData" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleData">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+
+          <div class="toolbar mem-toolbar mem-toolbar-session">
+                        <div class="mem-toolbar-grid">
+              <div class="mem-bot-select-wrap">
+                <label for="memBotSelect">Bot</label>
+                <select id="memBotSelect" class="chat-session-select" aria-label="Telegram bot"></select>
+                <button type="button" id="btnRenameMemBot" class="btn-mini ghost" title="Rename bot label">Rename</button>
+              </div>
+              <div class="session-select-wrap">
+                <div class="session-select-row">
+                  <label for="memSessionSelect">Session</label>
+                  <select id="memSessionSelect" class="chat-session-select"></select>
+                </div>
+              </div>
+              <div class="mem-timezone-wrap">
+                <label for="memUserTimezone">User timezone</label>
+                <select id="memUserTimezone" class="chat-session-select" aria-label="User timezone"></select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Memory section tabs (table nav + expanding underline, scoped) -->
+          <div class="mem-hnav" aria-label="Memory sections">
+            <ul class="mem-stabnav" role="tablist">
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link active"
+                  id="memSubtabBot"
+                  role="tab"
+                  data-mem-sub="bot"
+                  aria-selected="true"
+                  aria-controls="memPaneBot"
+                  >Assistant identity</a>
+              </li>
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link"
+                  id="memSubtabSession"
+                  role="tab"
+                  data-mem-sub="session"
+                  aria-selected="false"
+                  aria-controls="memPaneSession"
+                  >User memory by session</a>
+              </li>
+              <li role="presentation">
+                <a
+                  href="#"
+                  class="mem-stab-link"
+                  id="memSubtabSouls"
+                  role="tab"
+                  data-mem-sub="souls"
+                  aria-selected="false"
+                  aria-controls="memPaneSouls"
+                  >All soul rows (overview)</a>
+              </li>
+            </ul>
+          </div>
+
+          <div class="mem-subpane" id="memPaneBot" role="tabpanel" aria-labelledby="memSubtabBot" data-mem-sub="bot">
+          <div class="card mem-bot-card">
+            <h2>Assistant identity</h2>
+            <div class="mem-grid mem-bot-grid">
+              <div>
+                <label>Bot display name</label>
+                <input type="text" id="botDisplayName" placeholder="e.g. AI_AGENT_NG2" />
+              </div>
+              <div>
+                <label>Bot name (Myanmar)</label>
+                <input type="text" id="botDisplayNameMy" placeholder="ဥပမာ — ဆီနာ" />
+              </div>
+              <div>
+                <label>Bot gender (persona)</label>
+                <select id="botGender">
+                  <option value="">—</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+              </div>
+              <div class="mem-span2">
+                <label>Reply style</label>
+                <input type="text" id="botStyle" placeholder="e.g. concise, friendly" />
+              </div>
+              <div class="mem-span2">
+                <label>What the bot does / role</label>
+                <textarea
+                  id="botRole"
+                  rows="6"
+                  placeholder="Describe the assistant’s job, boundaries, and behavior (multiple lines)."
+                ></textarea>
+              
+              <div class="mem-span2">
+                <label>User timezone (this session)</label>
+                <select id="memBotUserTimezone" class="chat-session-select" aria-label="User timezone"></select>
+                <p class="hint">Used for "today", calendar, and saved dates. Same as the toolbar field above.</p>
+              </div></div>
+            </div>
+            <div class="mem-actions mem-bot-actions">
+              <button type="button" id="btnSaveBotPersona" class="success">Save for this session</button>
+              <button type="button" id="btnSaveBotPersonaGlobal" class="primary ghost">Save as global default</button>
+            </div>
+            <div class="mem-copy-row mem-bot-copy-row">
+              <label>Copy assistant identity from</label>
+              <select id="memCopyBotFromSelect"></select>
+              <button type="button" id="btnCopyBotPersona" class="primary ghost">Copy into current session</button>
+            </div>
+          </div>
+          </div>
+
+          <div
+            class="mem-subpane"
+            id="memPaneSession"
+            role="tabpanel"
+            aria-labelledby="memSubtabSession"
+            data-mem-sub="session"
+            hidden
+          >
+          <div class="card mem-user-card">
+            <h2>User memory by session</h2>
+            <div class="mem-grid">
+              <div>
+                <label>Display name</label>
+                <input type="text" id="memDisplayName" placeholder="Name to use in replies" />
+              </div>
+              <div>
+                <label>Timezone</label>
+                <select id="memSessionTimezone" class="chat-session-select" aria-label="User timezone"></select>
+              </div>
+              <div>
+                <label>Gender</label>
+                <select id="memGender">
+                  <option value="">—</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label>Age</label>
+                <select id="memAge">
+                  <option value="">—</option>
+                  <option value="Under 13">Under 13</option>
+                  <option value="13-17">13–17</option>
+                  <option value="18-24">18–24</option>
+                  <option value="25-34">25–34</option>
+                  <option value="35-44">35–44</option>
+                  <option value="45-54">45–54</option>
+                  <option value="55-64">55–64</option>
+                  <option value="65+">65+</option>
+                </select>
+              </div>
+              <div>
+                <label>Call me (English)</label>
+                <input type="text" id="memAddressUserEn" placeholder="e.g. friend, sir, မင်း" />
+              </div>
+              <div>
+                <label>Call me (Myanmar)</label>
+                <input type="text" id="memAddressUserMy" placeholder="ဥပမာ — ညီလေး၊ မင်း၊ အစ်ကို" />
+              </div>
+              <div class="mem-span2">
+                <label>Who I am</label>
+                <textarea id="memWhoAmI" rows="2" placeholder="Short self-description"></textarea>
+              </div>
+              <div class="mem-span2">
+                <label>Other notes</label>
+                <textarea id="memExtra" rows="2" placeholder="Anything else to remember"></textarea>
+              </div>
+              <div class="mem-span2">
+                <label>Conversation memory</label>
+                <textarea
+                  id="memMemorySummary"
+                  rows="8"
+                  placeholder="Summary appears after you chat; editable anytime."
+                ></textarea>
+              </div>
+            </div>
+            <div class="mem-actions">
+              <button type="button" id="btnSaveMemSession" class="success">Save session memory</button>
+              <button type="button" id="btnClearMemSession" class="danger ghost">Clear this session memory</button>
+            </div>
+            <div class="mem-copy-row">
+              <label>Copy memory from</label>
+              <select id="memCopyFromSelect"></select>
+              <button type="button" id="btnCopyMemSession" class="primary ghost">Copy into current session</button>
+            </div>
+          </div>
+
+          <div class="card mem-records-card">
+            <h2>Saved table rows (this session)</h2>
+            <p class="hint">
+              Structured rows (purchases with date/price, medicine + schedule). In chat say e.g. “add to my table: wallet May 2
+              2000 THB” or “list my medicine log”.
+            </p>
+            <button type="button" id="btnRefreshRecordsMem" class="primary ghost">Refresh table</button>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Id</th>
+                    <th>Type</th>
+                    <th>Date</th>
+                    <th>Title</th>
+                    <th>Amount</th>
+                    <th>Notes / schedule</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="recordsMemBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card mem-danger-card">
+            <h2>Reset all stored memory</h2>
+            <button type="button" id="btnClearAllMemory" class="danger wide">Clear ALL memory (whole database)</button>
+          </div>
+          </div>
+
+          <div
+            class="mem-subpane"
+            id="memPaneSouls"
+            role="tabpanel"
+            aria-labelledby="memSubtabSouls"
+            data-mem-sub="souls"
+            hidden
+          >
+          <div class="card">
+            <h2>All soul rows (overview)</h2>
+            <button type="button" id="btnRefreshSouls" class="primary ghost">Refresh table</button>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Name</th>
+                    <th>Summary preview</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody id="soulBody"></tbody>
+              </table>
+            </div>
+          </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-chat">
+          <h1>
+            <span>Chat</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleChat" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleChat">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <div class="card chat-console">
+            <div class="toolbar chat-toolbar">
+              <div class="session-select-wrap">
+                <div class="session-select-row">
+                  <label for="chatSessionSelect">Session -</label>
+                  <select id="chatSessionSelect" class="chat-session-select"></select>
+                </div>
+              </div>
+              <label for="chatLimit">History</label>
+              <select id="chatLimit">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+              </select>
+              <button type="button" id="btnRefreshChat" class="primary ghost">Refresh</button>
+              <button type="button" id="btnClearChatSession" class="danger ghost">Clear Session Chat</button>
+            </div>
+            <p class="hint chat-session-hint" id="chatSessionHint"></p>
+            <!-- Chat shell layout from Uiverse.io (reglobby); colors match app glass theme -->
+            <div class="chat-messenger">
+              <div id="chatThread" class="chat-thread chat-messenger-thread" aria-live="polite"></div>
+              <div class="chat-messenger-compose">
+                <div class="chat-messenger-input-place">
+                  <input id="chatImageInput" type="file" accept="image/*" class="hidden" />
+                  <textarea
+                    id="chatInput"
+                    class="chat-messenger-input"
+                    rows="2"
+                    placeholder="Type a message… (Enter to send, Shift+Enter newline)"
+                  ></textarea>
+                  <button type="button" id="btnChatImage" class="chat-messenger-send" aria-label="Attach image">IMG</button>
+                  <button type="button" id="btnChatSend" class="chat-messenger-send" aria-label="Send">
+                    <svg
+                      class="chat-messenger-send-icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 512 512"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M481.508,210.336L68.414,38.926c-17.403-7.222-37.064-4.045-51.309,8.287C2.86,59.547-3.098,78.551,1.558,96.808 L38.327,241h180.026c8.284,0,15.001,6.716,15.001,15.001c0,8.284-6.716,15.001-15.001,15.001H38.327L1.558,415.193 c-4.656,18.258,1.301,37.262,15.547,49.595c14.274,12.357,33.937,15.495,51.31,8.287l413.094-171.409 C500.317,293.862,512,276.364,512,256.001C512,235.638,500.317,218.139,481.508,210.336z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-calendar">
+          <h1>
+            <span>Calendar</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleCalendar" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleCalendar">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <div class="calendar-toolbar">
+            <div class="calendar-nav">
+              <button type="button" id="btnCalPrev" class="primary ghost" aria-label="Previous month">←</button>
+              <button type="button" id="btnCalToday" class="primary ghost">Today</button>
+              <button type="button" id="btnCalNext" class="primary ghost" aria-label="Next month">→</button>
+            </div>
+            <div id="calMonthLabel" class="calendar-month-label" aria-live="polite"></div>
+            <button type="button" id="btnRefreshCal" class="primary ghost">Refresh</button>
+          </div>
+          <div class="calendar-month-wrap">
+            <div class="calendar-weekdays" aria-hidden="true">
+              <span>Sun</span>
+              <span>Mon</span>
+              <span>Tue</span>
+              <span>Wed</span>
+              <span>Thu</span>
+              <span>Fri</span>
+              <span>Sat</span>
+            </div>
+            <div id="calMonthGrid" class="calendar-month-grid"></div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-pending">
+          <h1>
+            <span>Pending confirmations</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgTogglePending" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgTogglePending">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <button type="button" id="btnRefreshPending" class="primary ghost">Refresh</button>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Kind</th>
+                  <th>Payload</th>
+                  <th>Since</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="pendingBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-system">
+          <h1>
+            <span>System</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleSystem" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleSystem">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <div class="card">
+            <label>PostgreSQL connection URL</label>
+            <input type="text" id="databaseUrl" autocomplete="off" spellcheck="false" />
+            <p class="hint">Effective URL (password masked): <code id="databaseUrlResolved"></code></p>
+
+            <label>Web browse timeout (ms)</label>
+            <input type="number" id="browserTimeoutMs" min="1000" max="60000" step="500" />
+
+            <label>Max pages per search</label>
+            <input type="number" id="maxBrowsePages" min="1" max="2" />
+
+            <div class="switch-field switch-field--neo">
+              <span class="switch-field-label" id="webSearchEnabledLabel">Web search (DuckDuckGo)</span>
+              <div class="neo-toggle-container" title="Saved in data/settings.json">
+                <input
+                  class="neo-toggle-input"
+                  id="webSearchEnabled"
+                  type="checkbox"
+                  aria-labelledby="webSearchEnabledLabel"
+                />
+                <label class="neo-toggle" for="webSearchEnabled">
+                  <div class="neo-track">
+                    <div class="neo-background-layer"></div>
+                    <div class="neo-grid-layer"></div>
+                    <div class="neo-track-highlight"></div>
+                  </div>
+                  <div class="neo-thumb">
+                    <div class="neo-thumb-ring"></div>
+                    <div class="neo-thumb-core">
+                      <div class="neo-thumb-icon">
+                        <div class="neo-thumb-wave"></div>
+                        <div class="neo-thumb-pulse"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="neo-gesture-area"></div>
+                  <div class="neo-interaction-feedback">
+                    <div class="neo-ripple"></div>
+                    <div class="neo-progress-arc"></div>
+                  </div>
+                  <div class="neo-status">
+                    <div class="neo-status-indicator">
+                      <div class="neo-status-dot"></div>
+                      <div class="neo-status-text"></div>
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <label>Log level</label>
+            <select id="logLevel">
+              <option value="error">error</option>
+              <option value="warn">warn</option>
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+            </select>
+
+            <label class="inline"
+              ><input type="checkbox" id="openBrowserGui" /> Open browser when starting Control Panel</label
+            >
+
+            <label>Control panel port (restart app)</label>
+            <input type="number" id="guiPort" min="1024" max="65535" />
+
+            <p class="hint">Settings: <code id="settingsPath"></code></p>
+            <p class="hint">Project: <code id="projectRoot"></code></p>
+          </div>
+        </section>
+
+      </main>
+    </div>
+    <div class="scroll-indicator" id="scrollIndicator" aria-hidden="true">
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+      <div class="arrow"></div>
+    </div>
+    <div id="calendarDayModal" class="calendar-modal" hidden>
+      <div class="calendar-modal-backdrop" data-cal-modal-close="backdrop"></div>
+      <div class="calendar-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="calendarDayModalTitle">
+        <div class="calendar-modal-header">
+          <h3 id="calendarDayModalTitle">Events</h3>
+          <button type="button" class="btn-mini danger" id="btnCalendarModalClose" aria-label="Close">Close</button>
+        </div>
+        <div id="calendarDayModalBody" class="calendar-modal-body"></div>
+      </div>
+    </div>
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

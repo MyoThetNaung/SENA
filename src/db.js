@@ -1,134 +1,136 @@
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
-import { getConfig } from './config.js';
+import pg from 'pg';
+import { getConfig, projectRoot } from './config.js';
 import { logger } from './logger.js';
+import { bootstrapAdminFromEnv } from './auth/adminUsers.js';
 
-let dbInstance = null;
-let lastDbPath = null;
+const { Pool } = pg;
 
-export function resetDatabaseConnection() {
-  if (dbInstance) {
-    try {
-      dbInstance.close();
-    } catch {
-      /* ignore */
-    }
-    dbInstance = null;
-    lastDbPath = null;
+/** Parse int8 as number for Telegram-sized ids (safe < 2^53 in practice). */
+pg.types.setTypeParser(pg.types.builtins.INT8, (val) => (val == null ? null : Number(val)));
+
+let pool = null;
+let lastDatabaseUrl = null;
+let initPromise = null;
+
+function maskDatabaseUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.password) u.password = '****';
+    return u.toString();
+  } catch {
+    return '(invalid DATABASE_URL)';
   }
 }
 
-export function getDb() {
-  const { databasePath } = getConfig();
-  if (dbInstance && lastDbPath === databasePath) return dbInstance;
-  if (dbInstance) {
+/**
+ * Build pg Pool options from DATABASE_URL.
+ * SCRAM auth requires `password` to be a string — never undefined when a user is set.
+ */
+export function createPoolConfig(databaseUrl) {
+  const connectionString = String(databaseUrl || '').trim();
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is not configured. Set it in .env or Settings → System.');
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(connectionString);
+  } catch {
+    return { connectionString, max: 10 };
+  }
+
+  const config = {
+    host: parsed.hostname || '127.0.0.1',
+    port: parsed.port ? Number(parsed.port) : 5432,
+    database: decodeURIComponent(parsed.pathname.replace(/^\//, '') || 'sena'),
+    max: 10,
+    connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: 30_000,
+  };
+
+  const user = parsed.username ? decodeURIComponent(parsed.username) : '';
+  if (user) {
+    config.user = user;
+    config.password =
+      parsed.password != null && String(parsed.password).length > 0
+        ? decodeURIComponent(parsed.password)
+        : '';
+  } else if (process.env.PGUSER) {
+    config.user = String(process.env.PGUSER);
+    config.password = String(process.env.PGPASSWORD ?? '');
+  }
+
+  const sslmode = parsed.searchParams.get('sslmode');
+  if (sslmode === 'require' || sslmode === 'verify-full' || sslmode === 'prefer') {
+    config.ssl = sslmode === 'verify-full' ? { rejectUnauthorized: true } : true;
+  }
+
+  return config;
+}
+
+async function runMigrations(client) {
+  const schemaPath = path.join(projectRoot, 'schema', 'postgres.sql');
+  const sql = fs.readFileSync(schemaPath, 'utf8');
+  await client.query(sql);
+}
+
+/**
+ * Close the pool. Call after changing database URL in settings or on shutdown.
+ */
+export async function resetDatabaseConnection() {
+  initPromise = null;
+  if (pool) {
     try {
-      dbInstance.close();
+      await pool.end();
     } catch {
       /* ignore */
     }
-    dbInstance = null;
+    pool = null;
+    lastDatabaseUrl = null;
   }
-  const dir = path.dirname(databasePath);
-  fs.mkdirSync(dir, { recursive: true });
-  const db = new Database(databasePath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
-  migrate(db);
-  dbInstance = db;
-  lastDbPath = databasePath;
-  logger.info(`SQLite ready at ${databasePath}`);
-  return db;
 }
 
-function migrate(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS soul (
-      user_id INTEGER PRIMARY KEY,
-      display_name TEXT,
-      preferences TEXT NOT NULL DEFAULT '{}',
-      facts TEXT NOT NULL DEFAULT '[]',
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
+/**
+ * Shared connection pool; runs schema migration on first connect.
+ */
+export async function getPool() {
+  const { databaseUrl } = getConfig();
+  if (pool && lastDatabaseUrl === databaseUrl) return pool;
+  if (!initPromise) {
+    initPromise = (async () => {
+      try {
+        if (pool) {
+          try {
+            await pool.end();
+          } catch {
+            /* ignore */
+          }
+          pool = null;
+          lastDatabaseUrl = null;
+        }
+        const next = new Pool(createPoolConfig(databaseUrl));
+        const client = await next.connect();
+        try {
+          await runMigrations(client);
+          await bootstrapAdminFromEnv((text, params) => client.query(text, params));
+        } finally {
+          client.release();
+        }
+        pool = next;
+        lastDatabaseUrl = databaseUrl;
+        logger.info(`PostgreSQL ready (${maskDatabaseUrl(databaseUrl)})`);
+        return pool;
+      } finally {
+        initPromise = null;
+      }
+    })();
+  }
+  return initPromise;
+}
 
-    CREATE TABLE IF NOT EXISTS events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      starts_at TEXT NOT NULL,
-      title TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES soul(user_id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_events_user_starts ON events(user_id, starts_at);
-
-    CREATE TABLE IF NOT EXISTS pending_confirm (
-      user_id INTEGER PRIMARY KEY,
-      kind TEXT NOT NULL,
-      payload TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    CREATE TABLE IF NOT EXISTS chat_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_chat_log_user ON chat_log(user_id);
-    CREATE INDEX IF NOT EXISTS idx_chat_log_id ON chat_log(id);
-
-    CREATE TABLE IF NOT EXISTS telegram_users (
-      user_id INTEGER PRIMARY KEY,
-      status TEXT NOT NULL DEFAULT 'pending',
-      username TEXT,
-      first_name TEXT,
-      first_message_preview TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_seen TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_telegram_users_status ON telegram_users(status);
-    CREATE TABLE IF NOT EXISTS telegram_identity_map (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      bot_id INTEGER NOT NULL,
-      telegram_user_id INTEGER NOT NULL,
-      username TEXT,
-      first_name TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      last_seen TEXT NOT NULL DEFAULT (datetime('now')),
-      UNIQUE(bot_id, telegram_user_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_telegram_identity_bot_user ON telegram_identity_map(bot_id, telegram_user_id);
-
-    CREATE TABLE IF NOT EXISTS llm_usage (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      created_at TEXT NOT NULL,
-      day_key TEXT NOT NULL,
-      provider TEXT,
-      model TEXT,
-      prompt_tokens INTEGER NOT NULL DEFAULT 0,
-      completion_tokens INTEGER NOT NULL DEFAULT 0,
-      duration_ms INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_llm_usage_day ON llm_usage(day_key);
-
-    CREATE TABLE IF NOT EXISTS user_records (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      record_type TEXT NOT NULL,
-      occurred_on TEXT,
-      title TEXT NOT NULL,
-      amount REAL,
-      currency TEXT,
-      notes TEXT NOT NULL DEFAULT '',
-      meta TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES soul(user_id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_user_records_user ON user_records(user_id);
-    CREATE INDEX IF NOT EXISTS idx_user_records_user_type ON user_records(user_id, record_type);
-    CREATE INDEX IF NOT EXISTS idx_user_records_occurred ON user_records(user_id, occurred_on);
-  `);
+export async function query(text, params = []) {
+  const p = await getPool();
+  return p.query(text, params);
 }

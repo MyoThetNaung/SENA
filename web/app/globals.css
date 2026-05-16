@@ -1,0 +1,214 @@
+@import url('https://fonts.googleapis.com/css2?family=Audiowide&family=Open+Sans:wght@600;700&display=swap');
+@import url('/styles.css');
+
+body {
+  margin: 0;
+}
+
+.auth-wrap {
+  max-width: 420px;
+  margin: 4rem auto;
+  padding: 2rem;
+}
+
+.auth-lead {
+  color: #94a3b8;
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+.auth-error {
+  color: #f87171;
+  margin-top: 1rem;
+  min-height: 1.25rem;
+}
+
+.auth-status {
+  color: #94a3b8;
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+}
+
+.btn-google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  color: #0f172a;
+  font-family: 'Open Sans', system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-google:hover {
+  background: #fff;
+  border-color: rgba(148, 163, 184, 0.55);
+}
+
+.btn-google-icon {
+  display: inline-flex;
+  line-height: 0;
+}
+
+.btn-contact-admin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(14, 165, 233, 0.12);
+  color: #7dd3fc;
+  font-family: 'Open Sans', system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-contact-admin:hover {
+  background: rgba(14, 165, 233, 0.22);
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #bae6fd;
+}
+
+.auth-links {
+  margin-top: 1.5rem;
+  font-size: 0.9rem;
+}
+
+.auth-links a {
+  color: #60a5fa;
+}
+
+.auth-wrap .btn-link {
+  background: none;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* Auth sign-in form — modern input skin (email / password) */
+.auth-wrap form {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-wrap form label {
+  display: block;
+  font-family: 'Open Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #cbd5e1;
+  margin: 1.25rem 0 0.5rem;
+}
+
+.auth-wrap form label:first-of-type {
+  margin-top: 0;
+}
+
+.auth-wrap form input[type='email'],
+.auth-wrap form input[type='password'],
+.auth-wrap form input[type='text'] {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 12px;
+  font-family: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: #f1f5f9;
+  background-color: #0f172a;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.auth-wrap form input::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.auth-wrap form input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.28);
+  background-color: #0f172a;
+}
+
+.auth-wrap form input:focus-visible {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.28);
+}
+
+.auth-wrap form input:-webkit-autofill,
+.auth-wrap form input:-webkit-autofill:hover,
+.auth-wrap form input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #f1f5f9;
+  -webkit-box-shadow: 0 0 0 1000px #0f172a inset;
+  box-shadow: 0 0 0 1000px #0f172a inset;
+  caret-color: #f1f5f9;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.auth-wrap form button[type='submit'] {
+  margin-top: 1.25rem;
+}
+
+.user-chat-wrap {
+  max-width: 720px;
+  margin: 2rem auto;
+  padding: 1.5rem;
+}
+
+.user-chat-log {
+  min-height: 280px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.user-chat-row {
+  margin-bottom: 0.75rem;
+}
+
+.user-chat-row.user .chat-role {
+  color: #60a5fa;
+}
+
+.user-chat-row.assistant .chat-role {
+  color: #34d399;
+}
+
+.user-chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.user-chat-form input[type='text'] {
+  flex: 1;
+}

@@ -7,18 +7,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const projectRoot = path.resolve(__dirname, '..');
 
-function getRuntimeRoot() {
-  const isElectron = Boolean(process.versions?.electron);
-  if (!isElectron) return projectRoot;
-
-  if (process.env.PORTABLE_EXECUTABLE_DIR) {
-    return process.env.PORTABLE_EXECUTABLE_DIR;
-  }
-
-  return path.join(process.env.APPDATA || os.homedir(), 'SENA');
-}
-
-const runtimeRoot = getRuntimeRoot();
+const runtimeRoot = projectRoot;
 const SETTINGS_PATH = path.join(runtimeRoot, 'data', 'settings.json');
 
 function webSearchFromSettings(settings) {
@@ -42,12 +31,25 @@ function isValidTelegramBotToken(raw) {
   return /^\d+:[A-Za-z0-9_-]{20,}$/.test(t);
 }
 
-const defaultDb = path.join(runtimeRoot, 'data', 'assistant.db');
-
-function resolveUserPath(p, defaultRelative) {
+/** Resolve `models`, etc.: absolute paths pass through; relative paths are under the project root. */
+export function resolveUserPath(p, defaultRelative) {
   const raw = (p != null && String(p).trim() !== '' ? String(p).trim() : defaultRelative) || defaultRelative;
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) {
+    return path.join(os.homedir(), raw.slice(2));
+  }
+  if (path.isAbsolute(raw)) return path.normalize(raw);
+  return path.normalize(path.join(runtimeRoot, raw));
+}
+
+function resolveEnginePath(p) {
+  const raw = p != null && String(p).trim() !== '' ? String(p).trim() : 'engine';
+  if (raw === '~') return os.homedir();
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) {
+    return path.join(os.homedir(), raw.slice(2));
+  }
   if (path.isAbsolute(raw)) return raw;
-  return path.join(runtimeRoot, raw);
+  return path.join(projectRoot, raw);
 }
 
 function buildConfig() {
@@ -73,6 +75,10 @@ function buildConfig() {
   const llamaServerUrl = String(
     settings.llamaServerUrl ?? process.env.LLAMA_SERVER_URL ?? 'http://127.0.0.1:8080'
   ).replace(/\/$/, '');
+  const llamaServerMode = resolveLlamaServerMode(settings, process.env);
+  const llamaServerApiKey = String(
+    settings.llamaServerApiKey ?? process.env.LLAMA_SERVER_API_KEY ?? ''
+  ).trim();
   const llmProviderRaw = String(
     settings.llmProvider ?? process.env.LLM_PROVIDER ?? 'llama-server'
   ).toLowerCase();
@@ -97,19 +103,30 @@ function buildConfig() {
   const llmModel = String(
     settings.llmModel ?? settings.ollamaModel ?? process.env.LLM_MODEL ?? process.env.OLLAMA_MODEL ?? 'llama3.2'
   );
-  const engineDir = resolveUserPath(settings.engineDir, 'engine');
-  const settingsDb =
+  const engineDir = resolveEnginePath(settings.engineDir);
+  const settingsDbUrl =
+    settings.databaseUrl != null && String(settings.databaseUrl).trim() !== ''
+      ? String(settings.databaseUrl).trim()
+      : null;
+  const legacyPath =
     settings.databasePath != null && String(settings.databasePath).trim() !== ''
       ? String(settings.databasePath).trim()
       : null;
-  const envDb = process.env.DATABASE_PATH ? String(process.env.DATABASE_PATH).trim() : null;
-  const databasePath = settingsDb
-    ? resolveUserPath(settingsDb, 'data/assistant.db')
-    : envDb
-      ? resolveUserPath(envDb, 'data/assistant.db')
-      : defaultDb;
-  const databasePathDisplay = settingsDb || envDb || 'data/assistant.db';
+  const fromLegacyPostgresUrl =
+    legacyPath && /^(postgres|postgresql):\/\//i.test(legacyPath) ? legacyPath : null;
+  const envDbUrl = process.env.DATABASE_URL ? String(process.env.DATABASE_URL).trim() : null;
+  // Credentials live in .env (DATABASE_URL); settings.json may override host/db only when set in the GUI.
+  const databaseUrl = envDbUrl || settingsDbUrl || fromLegacyPostgresUrl || '';
+  const databaseUrlDisplay = envDbUrl || settingsDbUrl || fromLegacyPostgresUrl || '';
   const modelsDir = resolveUserPath(settings.modelsDir, 'models');
+  const ggufPath =
+    settings.ggufPath != null && String(settings.ggufPath).trim() !== ''
+      ? resolveUserPath(String(settings.ggufPath).trim(), 'models')
+      : '';
+  const mmprojPath =
+    settings.mmprojPath != null && String(settings.mmprojPath).trim() !== ''
+      ? resolveUserPath(String(settings.mmprojPath).trim(), 'models')
+      : '';
   const logLevel = String(settings.logLevel ?? process.env.LOG_LEVEL ?? 'info');
   const browserTimeoutMs = Math.min(
     60000,
@@ -122,8 +139,26 @@ function buildConfig() {
   const webSearchEnabled = webSearchFromSettings(settings);
   const guiPort = Math.min(
     65535,
-    Math.max(1024, Number(settings.guiPort ?? process.env.GUI_PORT) || 3847)
+    Math.max(1024, Number(settings.guiPort ?? process.env.GUI_PORT) || 3000)
   );
+  const telegramLoginDomain = String(
+    settings.telegramLoginDomain ?? process.env.TELEGRAM_LOGIN_DOMAIN ?? ''
+  ).trim();
+  const googleClientId = String(
+    settings.googleClientId ?? process.env.GOOGLE_CLIENT_ID ?? ''
+  ).trim();
+  const googleClientSecret = String(
+    settings.googleClientSecret ?? process.env.GOOGLE_CLIENT_SECRET ?? ''
+  ).trim();
+  const googleRedirectUri = String(
+    settings.googleRedirectUri ?? process.env.GOOGLE_REDIRECT_URI ?? ''
+  ).trim();
+  const adminTelegramUsername = String(
+    settings.adminTelegramUsername ??
+      process.env.SENA_ADMIN_TELEGRAM ??
+      process.env.ADMIN_TELEGRAM_USERNAME ??
+      ''
+  ).trim();
   const openBrowserGui =
     settings.openBrowser === false
       ? false
@@ -177,23 +212,31 @@ function buildConfig() {
     telegramBotTokens,
     ollamaBaseUrl,
     llamaServerUrl,
+    llamaServerMode,
+    llamaServerApiKey,
     llmProvider,
     openaiApiKey,
     geminiApiKey,
     openrouterApiKey,
     openrouterBaseUrl,
     llmModel,
-    /** @deprecated use llmModel */
     ollamaModel: llmModel,
     engineDir,
-    databasePath,
-    databasePathDisplay,
+    databaseUrl,
+    databaseUrlDisplay,
     logLevel,
     browserTimeoutMs,
     maxBrowsePages,
     webSearchEnabled,
     guiPort,
+    telegramLoginDomain,
+    googleClientId,
+    googleClientSecret,
+    googleRedirectUri,
+    adminTelegramUsername,
     modelsDir,
+    ggufPath,
+    mmprojPath,
     openBrowserGui,
     autoStartLlamaServer,
     botPersona,
@@ -228,6 +271,47 @@ export function saveSettingsToDisk(partial) {
   }
   fs.writeFileSync(SETTINGS_PATH, JSON.stringify(next, null, 2), 'utf8');
   reloadConfig();
+}
+
+/** One-time upgrade: `llamaServerExternal` → `llamaServerMode: "remote"`. */
+export function migrateLegacyLlamaServerSettings() {
+  const prev = readSettingsFile();
+  if (prev.llamaServerMode === 'remote' || prev.llamaServerMode === 'local') return false;
+  if (prev.llamaServerExternal !== true && prev.llamaServerExternal !== 'true') return false;
+  saveSettingsToDisk({ llamaServerMode: 'remote', llamaServerExternal: null });
+  return true;
+}
+
+/**
+ * Resolve local vs remote llama.cpp server mode from settings (incl. legacy `llamaServerExternal`).
+ * @param {Record<string, unknown>} [settings]
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function resolveLlamaServerMode(settings = {}, env = process.env) {
+  const fromSettings = settings.llamaServerMode;
+  if (fromSettings != null && String(fromSettings).trim() !== '') {
+    return String(fromSettings).toLowerCase() === 'remote' ? 'remote' : 'local';
+  }
+  const fromEnv = env?.LLAMA_SERVER_MODE;
+  if (fromEnv != null && String(fromEnv).trim() !== '') {
+    return String(fromEnv).toLowerCase() === 'remote' ? 'remote' : 'local';
+  }
+  if (settings.llamaServerExternal === true || settings.llamaServerExternal === 'true') {
+    return 'remote';
+  }
+  return 'local';
+}
+
+/** True when llama.cpp server runs on a remote host (no local binary / GGUF spawn). */
+export function isLlamaServerRemote(c = getConfig()) {
+  if (c.llamaServerMode === 'remote') return true;
+  if (c.llamaServerMode === 'local') return false;
+  try {
+    const host = new URL(String(c.llamaServerUrl || '')).hostname.toLowerCase();
+    return !['127.0.0.1', 'localhost', '::1', '0.0.0.0'].includes(host);
+  } catch {
+    return false;
+  }
 }
 
 /** Required before starting the Telegram bot (CLI or GUI). */

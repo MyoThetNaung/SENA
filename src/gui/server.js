@@ -1,13 +1,20 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import fs from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
+import { pipeline } from 'stream/promises';
 import { fileURLToPath } from 'url';
+import TelegramBot from 'node-telegram-bot-api';
 import {
   getConfig,
   reloadConfig,
   saveSettingsToDisk,
   getSettingsPath,
   projectRoot,
+  resolveUserPath,
+  isLlamaServerRemote,
+  migrateLegacyLlamaServerSettings,
 } from '../config.js';
 import {
   appendChatMessage,
@@ -26,35 +33,62 @@ import {
 } from '../memory/soul.js';
 import { clearAllStoredMemory } from '../memory/clearAllMemory.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
-import { resetDatabaseConnection, getDb } from '../db.js';
+import { resetDatabaseConnection, getPool, query } from '../db.js';
 import { listAllEvents, deleteEventById } from '../calendar/calendar.js';
 import { deleteUserRecordById, listUserRecords } from '../records/userRecords.js';
 import { listAllPending, clearPending } from '../core/pending.js';
 import {
   listTelegramUsers,
-  setTelegramUserStatus,
   setTelegramUserName,
   getTelegramLabelsForUserIds,
   clearTelegramAccessRecords,
-  listKnownTelegramBots,
   SCOPED_USER_ID_OFFSET,
 } from '../access/telegramAccess.js';
+import {
+  listConfiguredTelegramBots,
+  resolveTelegramBotIdFromToken,
+  removeBotScopedMapKeys,
+} from '../access/telegramBots.js';
 import { handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
 import { GUI_CONSOLE_USER_ID } from '../const/guiSession.js';
-import { buildModelCatalog, probeLlamaServerReachable, normalizeCatalogLlmProvider } from '../llm/catalog.js';
+import {
+  buildModelCatalog,
+  probeLlamaServerReachable,
+  fetchLlamaServerModelNames,
+  normalizeCatalogLlmProvider,
+  fetchOllamaModelNames,
+} from '../llm/catalog.js';
 import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
 import { startBotFromGui, stopBotFromGui, getBotStatus } from './bot-runner.js';
 import {
   startLlamaServerIfConfigured,
+  startOllamaServerIfConfigured,
   stopLlamaServerIfWeStarted,
   llamaProcessRunning,
+  embeddedLlmProcessRunning,
+  startEmbeddedLlamaServerFromPaths,
+  getEmbeddedLlamaPanelState,
 } from '../llm/llamaProcess.js';
 import { logger, syncLoggerLevel } from '../logger.js';
 import { getLlmUsageStats } from '../llm/tokenUsage.js';
 import { getHardwareSnapshot } from './hardwareStats.js';
+import { createAuthRouter, initAuth } from '../auth/routes.js';
+import { readSessionToken } from '../auth/middleware.js';
+import { getSessionByToken } from '../auth/sessions.js';
+import {
+  listAllowlist,
+  inviteToAllowlist,
+  setAllowlistStatus,
+  updateAllowlistEntry,
+  deleteAllowlistEntry,
+  clearAllowlist,
+} from '../access/telegramAllowlist.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, 'public');
+const DEFAULT_GGUF_FILE = 'gemma-4-E4B-it-UD-Q8_K_XL.gguf';
+const DEFAULT_GGUF_MODEL_ID = DEFAULT_GGUF_FILE.replace(/\.gguf$/i, '');
+const DEFAULT_GGUF_URL = `https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/${DEFAULT_GGUF_FILE}?download=true`;
 
 function maskToken(t) {
   const s = String(t || '').trim();
@@ -66,6 +100,16 @@ function maskToken(t) {
 function isValidTelegramBotToken(raw) {
   const t = String(raw ?? '').trim();
   return /^\d+:[A-Za-z0-9_-]{20,}$/.test(t);
+}
+
+function maskDatabaseUrl(url) {
+  try {
+    const u = new URL(String(url || ''));
+    if (u.password) u.password = '****';
+    return u.toString();
+  } catch {
+    return String(url || '');
+  }
 }
 
 function listGgufInFolder(dir) {
@@ -100,6 +144,14 @@ function listGgufInFolder(dir) {
 }
 
 
+/** Match settings → absolute path for GGUF/mmproj (relative entries are under app data / project root, not process cwd). */
+function resolveStoredModelsFilePath(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return '';
+  if (path.isAbsolute(t)) return path.normalize(t);
+  return resolveUserPath(t, 'models');
+}
+
 function readSettingsForApi() {
   reloadConfig();
   syncLoggerLevel();
@@ -125,10 +177,14 @@ function readSettingsForApi() {
   const envGem = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '').trim();
   const hasGeminiKey = Boolean(fileGem || envGem);
   const gguf = listGgufInFolder(c.modelsDir);
-  const databasePathInput =
-    raw.databasePath != null && String(raw.databasePath).trim() !== ''
-      ? String(raw.databasePath).trim()
-      : c.databasePathDisplay;
+  const hasSavedLlmModel = Boolean(
+    (raw.llmModel != null && String(raw.llmModel).trim()) ||
+      (raw.ollamaModel != null && String(raw.ollamaModel).trim())
+  );
+  const databaseUrlInput =
+    raw.databaseUrl != null && String(raw.databaseUrl).trim() !== ''
+      ? String(raw.databaseUrl).trim()
+      : c.databaseUrlDisplay;
   const modelsDirInput =
     raw.modelsDir != null && String(raw.modelsDir).trim() !== ''
       ? String(raw.modelsDir).trim()
@@ -137,6 +193,10 @@ function readSettingsForApi() {
     raw.engineDir != null && String(raw.engineDir).trim() !== ''
       ? String(raw.engineDir).trim()
       : 'engine';
+  const mmprojPathInput =
+    raw.mmprojPath != null && String(raw.mmprojPath).trim() !== '' ? String(raw.mmprojPath).trim() : '';
+  const ggufPathInput =
+    raw.ggufPath != null && String(raw.ggufPath).trim() !== '' ? String(raw.ggufPath).trim() : '';
 
   const out = {
     projectRoot,
@@ -147,17 +207,29 @@ function readSettingsForApi() {
     llmProvider: c.llmProvider,
     ollamaBaseUrl: c.ollamaBaseUrl,
     llamaServerUrl: c.llamaServerUrl,
+    llamaServerMode: c.llamaServerMode,
+    llamaServerRemote: c.llamaServerMode === 'remote',
+    hasLlamaServerApiKey: Boolean(
+      (raw.llamaServerApiKey != null && String(raw.llamaServerApiKey).trim()) ||
+        process.env.LLAMA_SERVER_API_KEY
+    ),
+    llamaServerApiKeyMasked: maskToken(c.llamaServerApiKey),
     llmModel: c.llmModel,
+    hasSavedLlmModel,
     ollamaModel: c.llmModel,
     guiPort: c.guiPort,
     logLevel: c.logLevel,
     browserTimeoutMs: c.browserTimeoutMs,
     maxBrowsePages: c.maxBrowsePages,
     webSearchEnabled: c.webSearchEnabled,
-    databasePath: databasePathInput,
-    databasePathResolved: c.databasePath,
+    databaseUrl: databaseUrlInput,
+    databaseUrlResolved: maskDatabaseUrl(c.databaseUrl),
     modelsDir: c.modelsDir,
     modelsDirInput,
+    ggufPath: c.ggufPath,
+    ggufPathInput,
+    mmprojPath: c.mmprojPath,
+    mmprojPathInput,
     engineDir: c.engineDir,
     engineDirInput,
     openBrowserGui: c.openBrowserGui,
@@ -181,24 +253,139 @@ function readSettingsForApi() {
   return out;
 }
 
-export function createGuiApp() {
+function reindexBotScopedMapAfterRemoval(rawMap, removedTokenIndex) {
+  const src = rawMap && typeof rawMap === 'object' && !Array.isArray(rawMap) ? rawMap : {};
+  const out = {};
+  for (const [k, v] of Object.entries(src)) {
+    const botId = Number(k);
+    if (!Number.isInteger(botId) || botId < 1) continue;
+    const tokenIdx = botId - 1;
+    if (tokenIdx === removedTokenIndex) continue;
+    const nextBotId = tokenIdx > removedTokenIndex ? botId - 1 : botId;
+    out[String(nextBotId)] = v;
+  }
+  return out;
+}
+
+async function getTelegramBotIdentityFromToken(token, index) {
+  const t = String(token || '').trim();
+  if (!t) return { index, ok: false, error: 'Empty token' };
+  const bot = new TelegramBot(t, { polling: false });
+  try {
+    const me = await bot.getMe();
+    return {
+      index,
+      ok: true,
+      id: Number(me?.id),
+      username: String(me?.username || '').trim(),
+      firstName: String(me?.first_name || '').trim(),
+    };
+  } catch (e) {
+    return { index, ok: false, error: String(e?.message || 'getMe failed') };
+  }
+}
+
+async function downloadDefaultGgufToModelsDir(modelsDir) {
+  fs.mkdirSync(modelsDir, { recursive: true });
+  const outPath = path.join(modelsDir, DEFAULT_GGUF_FILE);
+  if (fs.existsSync(outPath)) {
+    saveSettingsToDisk({ llmModel: DEFAULT_GGUF_MODEL_ID });
+    return {
+      fileName: DEFAULT_GGUF_FILE,
+      modelId: DEFAULT_GGUF_MODEL_ID,
+      path: outPath,
+      alreadyExists: true,
+    };
+  }
+
+  const tmpPath = `${outPath}.download`;
+  try {
+    const res = await fetch(DEFAULT_GGUF_URL);
+    if (!res.ok || !res.body) {
+      throw new Error(`Hugging Face download failed (HTTP ${res.status})`);
+    }
+    await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(tmpPath));
+    fs.renameSync(tmpPath, outPath);
+    saveSettingsToDisk({ llmModel: DEFAULT_GGUF_MODEL_ID });
+    return {
+      fileName: DEFAULT_GGUF_FILE,
+      modelId: DEFAULT_GGUF_MODEL_ID,
+      path: outPath,
+      sizeBytes: fs.statSync(outPath).size,
+      alreadyExists: false,
+    };
+  } catch (e) {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+}
+
+/** Express app for all `/api/*` routes (no static files — UI is served by Next.js). */
+export function createApiApp() {
   const app = express();
+  app.use(cookieParser());
   app.use(express.json({ limit: '12mb' }));
 
-  app.use(express.static(publicDir));
+  app.use('/api/auth', createAuthRouter());
+
+  app.use(async (req, res, next) => {
+    if (!req.path.startsWith('/api/')) return next();
+    if (req.path.startsWith('/api/auth') || req.path === '/api/health') return next();
+    try {
+      const token = readSessionToken(req);
+      req.sessionToken = token || null;
+      req.session = token ? await getSessionByToken(token) : null;
+      if (req.path.startsWith('/api/user/')) {
+        if (req.session?.role !== 'user' || !Number.isFinite(req.session.soulUserId)) {
+          res.status(401).json({ ok: false, error: 'User login required' });
+          return;
+        }
+        return next();
+      }
+      if (req.session?.role !== 'admin') {
+        res.status(401).json({ ok: false, error: 'Admin login required' });
+        return;
+      }
+      next();
+    } catch (e) {
+      next(e);
+    }
+  });
 
   app.get('/api/settings', (req, res) => {
     try {
+      migrateLegacyLlamaServerSettings();
       res.json(readSettingsForApi());
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/settings', (req, res) => {
+  app.get('/api/telegram/bot-identities', async (req, res) => {
+    try {
+      reloadConfig();
+      const tokens = Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+      if (!tokens.length) {
+        res.json({ bots: [] });
+        return;
+      }
+      const bots = await Promise.all(
+        tokens.map((token, index) => getTelegramBotIdentityFromToken(token, index))
+      );
+      res.json({ bots });
+    } catch (e) {
+      res.status(500).json({ error: e.message, bots: [] });
+    }
+  });
+
+  app.post('/api/settings', async (req, res) => {
     try {
       const b = req.body || {};
-      const prevDb = getConfig().databasePath;
+      const prevDb = getConfig().databaseUrl;
       const patch = {};
 
       if (typeof b.telegramBotToken === 'string') {
@@ -217,6 +404,27 @@ export function createGuiApp() {
           patch.telegramBotTokens = [...new Set([...current, t])];
           patch.telegramBotToken = patch.telegramBotTokens[0] || t;
         }
+      }
+      if (b.telegramBotTokenRemoveIndex !== undefined) {
+        const removeIdx = Number(b.telegramBotTokenRemoveIndex);
+        if (!Number.isInteger(removeIdx) || removeIdx < 0) {
+          throw new Error('Invalid Telegram bot index.');
+        }
+        const current = Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+        if (removeIdx >= current.length) throw new Error('Telegram bot index out of range.');
+        const removedToken = current[removeIdx];
+        const removedTelegramId = await resolveTelegramBotIdFromToken(removedToken);
+        const nextTokens = current.filter((_, idx) => idx !== removeIdx);
+        patch.telegramBotTokens = nextTokens.length ? nextTokens : null;
+        patch.telegramBotToken = nextTokens[0] || null;
+
+        const currentNames = getConfig().memoryBotNamesById || {};
+        const nextNames = removeBotScopedMapKeys(currentNames, removeIdx, removedTelegramId);
+        patch.memoryBotNamesById = Object.keys(nextNames).length ? nextNames : null;
+
+        const currentPersonaByBot = getConfig().botPersonaByBotId || {};
+        const nextPersonaByBot = removeBotScopedMapKeys(currentPersonaByBot, removeIdx, removedTelegramId);
+        patch.botPersonaByBotId = Object.keys(nextPersonaByBot).length ? nextPersonaByBot : null;
       }
       if (b.telegramBotTokensClear === true) {
         patch.telegramBotTokens = null;
@@ -253,6 +461,16 @@ export function createGuiApp() {
       if (typeof b.llamaServerUrl === 'string' && b.llamaServerUrl.trim()) {
         patch.llamaServerUrl = b.llamaServerUrl.trim().replace(/\/$/, '');
       }
+      if (b.llamaServerMode === 'local' || b.llamaServerMode === 'remote') {
+        patch.llamaServerMode = b.llamaServerMode;
+        patch.llamaServerExternal = null;
+      }
+      if (typeof b.llamaServerApiKey === 'string' && b.llamaServerApiKey.trim()) {
+        patch.llamaServerApiKey = b.llamaServerApiKey.trim();
+      }
+      if (b.llamaServerApiKeyClear === true) {
+        patch.llamaServerApiKey = null;
+      }
       if (typeof b.openrouterBaseUrl === 'string' && b.openrouterBaseUrl.trim()) {
         patch.openrouterBaseUrl = b.openrouterBaseUrl.trim().replace(/\/$/, '');
       }
@@ -284,13 +502,24 @@ export function createGuiApp() {
       if (typeof b.webSearchEnabled === 'boolean') {
         patch.webSearchEnabled = b.webSearchEnabled;
       }
-      if (typeof b.databasePath === 'string') {
-        const d = b.databasePath.trim();
-        patch.databasePath = d || null;
+      if (typeof b.databaseUrl === 'string') {
+        const d = b.databaseUrl.trim();
+        patch.databaseUrl = d || null;
+      }
+      if (typeof b.databasePath === 'string' && /^(postgres|postgresql):\/\//i.test(b.databasePath)) {
+        patch.databaseUrl = b.databasePath.trim() || null;
       }
       if (typeof b.modelsDir === 'string') {
         const m = b.modelsDir.trim();
         patch.modelsDir = m || null;
+      }
+      if (typeof b.ggufPath === 'string') {
+        const gp = b.ggufPath.trim();
+        patch.ggufPath = gp || null;
+      }
+      if (typeof b.mmprojPath === 'string') {
+        const mp = b.mmprojPath.trim();
+        patch.mmprojPath = mp || null;
       }
       if (typeof b.engineDir === 'string') {
         const ed = b.engineDir.trim();
@@ -350,9 +579,10 @@ export function createGuiApp() {
       }
 
       saveSettingsToDisk(patch);
-      const nextDb = getConfig().databasePath;
+      migrateLegacyLlamaServerSettings();
+      const nextDb = getConfig().databaseUrl;
       if (nextDb !== prevDb) {
-        resetDatabaseConnection();
+        await resetDatabaseConnection();
       }
       syncLoggerLevel();
       res.json({ ok: true, settings: readSettingsForApi() });
@@ -361,7 +591,7 @@ export function createGuiApp() {
     }
   });
 
-  /** Saved tokens + bot naming/persona metadata + SQLite access list. Stops bot if running. Does not edit .env. */
+  /** Saved tokens + bot naming/persona metadata + Telegram access list. Stops bot if running. Does not edit .env. */
   app.post('/api/settings/reset-telegram', async (req, res) => {
     try {
       const stopOut = await stopBotFromGui();
@@ -374,7 +604,7 @@ export function createGuiApp() {
         memoryBotNamesById: null,
         botPersonaByBotId: null,
       });
-      clearTelegramAccessRecords();
+      await clearTelegramAccessRecords();
       syncLoggerLevel();
       res.json({ ok: true, settings: readSettingsForApi() });
     } catch (e) {
@@ -468,7 +698,11 @@ export function createGuiApp() {
       res.json({
         provider: c.llmProvider,
         url: backendUrl,
+        llamaServerMode: c.llamaServerMode,
+        llamaServerRemote: c.llmProvider === 'llama-server' ? isLlamaServerRemote(c) : false,
         spawnedByApp,
+        embeddedRunning: embeddedLlmProcessRunning(),
+        embeddedPanel: c.llmProvider === 'llama-server' ? getEmbeddedLlamaPanelState() : null,
         listening,
         ollamaReachable,
         online,
@@ -478,23 +712,89 @@ export function createGuiApp() {
     }
   });
 
+  app.post('/api/llm/test-connection', async (req, res) => {
+    try {
+      const b = req.body || {};
+      const provider = String(b.provider || '').trim().toLowerCase();
+      const baseUrl = String(b.baseUrl || '').trim().replace(/\/$/, '');
+      if (provider !== 'ollama' && provider !== 'llama-server') {
+        res.status(400).json({ ok: false, error: 'Test connection only supports local backends.' });
+        return;
+      }
+      if (!baseUrl) {
+        res.status(400).json({ ok: false, error: 'Base URL is required.' });
+        return;
+      }
+
+      if (provider === 'llama-server') {
+        const authOverrides = {};
+        const apiKey = String(b.llamaServerApiKey ?? b.apiKey ?? '').trim();
+        if (apiKey) authOverrides.apiKey = apiKey;
+        const reachable = await probeLlamaServerReachable(baseUrl, 3000, authOverrides);
+        if (!reachable) {
+          res.status(400).json({
+            ok: false,
+            provider,
+            url: baseUrl,
+            error: `Could not connect to llama.cpp server at ${baseUrl}.`,
+          });
+          return;
+        }
+        const listed = await fetchLlamaServerModelNames(baseUrl, authOverrides);
+        res.json({
+          ok: true,
+          provider,
+          url: baseUrl,
+          modelCount: listed.models?.length ?? 0,
+          message: listed.ok
+            ? `Connected to llama.cpp server at ${baseUrl} (${listed.models.length} model(s) listed).`
+            : `Connected to llama.cpp server at ${baseUrl}.`,
+        });
+        return;
+      }
+
+      const out = await fetchOllamaModelNames(baseUrl);
+      if (!out.ok) {
+        res.status(400).json({
+          ok: false,
+          provider,
+          url: baseUrl,
+          error: out.error || `Could not connect to Ollama at ${baseUrl}.`,
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        provider,
+        url: baseUrl,
+        modelCount: Array.isArray(out.models) ? out.models.length : 0,
+        message: `Connected to Ollama at ${baseUrl}.`,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.post('/api/llm/start-server', async (req, res) => {
     try {
       reloadConfig();
       const c = getConfig();
-      if (c.llmProvider !== 'llama-server') {
+      if (c.llmProvider !== 'llama-server' && c.llmProvider !== 'ollama') {
         res.status(400).json({
           ok: false,
-          error: 'Set LLM backend to llama.cpp server (Engine tab), save, then try again.',
+          error: 'Set LLM backend to Ollama or llama.cpp server (Engine tab), save, then try again.',
         });
         return;
       }
-      const out = await startLlamaServerIfConfigured(true);
+      const out =
+        c.llmProvider === 'ollama'
+          ? await startOllamaServerIfConfigured(true)
+          : await startLlamaServerIfConfigured(true);
       if (!out.ok) {
         res.status(400).json({ ok: false, error: out.error || 'Start failed' });
         return;
       }
-      res.json({ ok: true, skipped: out.skipped });
+      res.json({ ok: true, provider: c.llmProvider, skipped: out.skipped });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -509,12 +809,105 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/chat/sessions', (req, res) => {
+  app.get('/api/llm/embedded-logs', (req, res) => {
     try {
-      getDb();
-      const sessions = listChatSessions();
+      res.json({ ok: true, ...getEmbeddedLlamaPanelState() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/llm/start-embedded', async (req, res) => {
+    try {
+      reloadConfig();
+      const c = getConfig();
+      if (c.llmProvider !== 'llama-server') {
+        res.status(400).json({
+          ok: false,
+          error: 'Set LLM backend to llama.cpp server on the Engine tab, save settings, then try again.',
+        });
+        return;
+      }
+      if (isLlamaServerRemote(c)) {
+        res.status(400).json({
+          ok: false,
+          error: 'Embedded server is not used in remote mode. Set the online base URL on the Engine tab instead.',
+        });
+        return;
+      }
+      const b = req.body || {};
+      const ggufPath = resolveStoredModelsFilePath(String(b.ggufPath || '').trim());
+      const mmprojPathRaw = String(b.mmprojPath || '').trim();
+      const mmprojPath = mmprojPathRaw ? resolveStoredModelsFilePath(mmprojPathRaw) : '';
+      const ctxSize = b.ctxSize != null ? Number(b.ctxSize) : 4096;
+
+      if (!ggufPath) {
+        res.status(400).json({
+          ok: false,
+          error: 'Main model path is empty.',
+          embeddedPanel: getEmbeddedLlamaPanelState(),
+        });
+        return;
+      }
+
+      let host = String(b.host || '').trim();
+      let port = b.port != null ? Number(b.port) : NaN;
+      if (!host || !Number.isFinite(port) || port < 1) {
+        try {
+          const u = new URL(String(c.llamaServerUrl || 'http://127.0.0.1:8080').replace(/\/$/, ''));
+          host = u.hostname || '127.0.0.1';
+          const p = u.port;
+          port = Number(p || 8080);
+        } catch {
+          host = '127.0.0.1';
+          port = 8080;
+        }
+      }
+
+      const out = await startEmbeddedLlamaServerFromPaths({
+        ggufPath,
+        mmprojPath: mmprojPath || null,
+        host,
+        port,
+        ctxSize,
+      });
+      if (!out.ok) {
+        res.status(400).json({
+          ok: false,
+          error: out.error || 'Start failed',
+          embeddedPanel: getEmbeddedLlamaPanelState(),
+        });
+        return;
+      }
+      const url = `http://${host}:${port}`.replace(/\/$/, '');
+      const llmModel = path.basename(ggufPath).replace(/\.gguf$/i, '') || 'local';
+      const modelsDirForGguf = path.dirname(ggufPath);
+      saveSettingsToDisk({
+        llmProvider: 'llama-server',
+        llamaServerMode: 'local',
+        llamaServerExternal: null,
+        llamaServerUrl: url,
+        ggufPath,
+        mmprojPath: mmprojPath || '',
+        llmModel,
+        modelsDir: modelsDirForGguf,
+      });
+      res.json({
+        ok: true,
+        url,
+        embeddedPanel: getEmbeddedLlamaPanelState(),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message, embeddedPanel: getEmbeddedLlamaPanelState() });
+    }
+  });
+
+  app.get('/api/chat/sessions', async (req, res) => {
+    try {
+      await getPool();
+      const sessions = await listChatSessions();
       const ids = sessions.map((s) => s.userId);
-      const labels = getTelegramLabelsForUserIds(ids);
+      const labels = await getTelegramLabelsForUserIds(ids);
       const out = sessions.map((s) => ({
         userId: s.userId,
         lastAt: s.lastAt,
@@ -529,7 +922,7 @@ export function createGuiApp() {
   app.post('/api/chat/send', async (req, res) => {
     try {
       reloadConfig();
-      getDb();
+      await getPool();
       const cfg = getConfig();
       const userId = Number((req.body || {}).userId);
       const text = String((req.body || {}).text ?? '').trim();
@@ -543,13 +936,13 @@ export function createGuiApp() {
         return;
       }
       const userPreview = text || '[image]';
-      appendChatMessage(userId, 'user', userPreview);
+      await appendChatMessage(userId, 'user', userPreview);
       const startedAt = Date.now();
       try {
         const out = imageDataUrl
           ? await handleImageMessage(userId, text, imageDataUrl)
           : await handleTextMessage(userId, text);
-        appendChatMessage(userId, 'assistant', out.reply);
+        await appendChatMessage(userId, 'assistant', out.reply);
         scheduleMemorySummaryRefresh(userId);
         const elapsedMs = Date.now() - startedAt;
         res.json({
@@ -564,7 +957,7 @@ export function createGuiApp() {
         });
       } catch (e) {
         const errText = `Error: ${e.message}`;
-        appendChatMessage(userId, 'assistant', errText);
+        await appendChatMessage(userId, 'assistant', errText);
         res.status(500).json({ ok: false, error: e.message });
       }
     } catch (e) {
@@ -573,30 +966,30 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/chat', (req, res) => {
+  app.get('/api/chat', async (req, res) => {
     try {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
       const userId = req.query.userId != null && req.query.userId !== '' ? Number(req.query.userId) : null;
-      const rows = listChatMessages({
+      const rows = await listChatMessages({
         userId: Number.isFinite(userId) ? userId : null,
         limit,
       });
-      const userIds = listChatUserIds();
+      const userIds = await listChatUserIds();
       res.json({ messages: rows, userIds, guiConsoleUserId: GUI_CONSOLE_USER_ID });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/chat/clear-session', (req, res) => {
+  app.post('/api/chat/clear-session', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const userId = Number((req.body || {}).userId);
       if (!Number.isFinite(userId)) {
         res.status(400).json({ ok: false, error: 'Valid userId is required.' });
         return;
       }
-      const deleted = clearChatMessagesForUser(userId);
+      const deleted = await clearChatMessagesForUser(userId);
       res.json({ ok: true, deleted });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -614,33 +1007,58 @@ export function createGuiApp() {
     }
   });
 
+  app.post('/api/models/download-default', async (req, res) => {
+    try {
+      reloadConfig();
+      const c = getConfig();
+      const result = await downloadDefaultGgufToModelsDir(c.modelsDir);
+      res.json({ ok: true, ...result, settings: readSettingsForApi() });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   app.get('/api/llm/catalog', async (req, res) => {
     try {
       reloadConfig();
-      const override = normalizeCatalogLlmProvider(req.query?.llmProvider);
-      const catalog = await buildModelCatalog(override ? { llmProvider: override } : {});
+      const q = req.query || {};
+      const override = normalizeCatalogLlmProvider(q.llmProvider);
+      const catalogOpts = {};
+      if (override) catalogOpts.llmProvider = override;
+      if (q.llamaServerUrl != null && String(q.llamaServerUrl).trim()) {
+        catalogOpts.llamaServerUrl = String(q.llamaServerUrl).trim();
+      }
+      if (q.llamaServerMode === 'local' || q.llamaServerMode === 'remote') {
+        catalogOpts.llamaServerMode = q.llamaServerMode;
+      }
+      if (q.llamaServerApiKey != null && String(q.llamaServerApiKey).trim()) {
+        catalogOpts.llamaServerApiKey = String(q.llamaServerApiKey).trim();
+      }
+      const catalog = await buildModelCatalog(catalogOpts);
       res.json(catalog);
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get('/api/data/summary', (req, res) => {
+  app.get('/api/data/summary', async (req, res) => {
     try {
-      const db = getDb();
-      const chatCount = db.prepare('SELECT COUNT(*) as c FROM chat_log').get().c;
-      const eventsCount = db.prepare('SELECT COUNT(*) as c FROM events').get().c;
+      await getPool();
+      const chatCount = (await query('SELECT COUNT(*)::int AS c FROM chat_log')).rows[0].c;
+      const eventsCount = (await query('SELECT COUNT(*)::int AS c FROM events')).rows[0].c;
       let recordsCount = 0;
       try {
-        recordsCount = db.prepare('SELECT COUNT(*) as c FROM user_records').get().c;
+        recordsCount = (await query('SELECT COUNT(*)::int AS c FROM user_records')).rows[0].c;
       } catch {
         /* table missing before migrate */
       }
-      const soulsCount = db.prepare('SELECT COUNT(*) as c FROM soul').get().c;
-      const pendingCount = db.prepare('SELECT COUNT(*) as c FROM pending_confirm').get().c;
+      const soulsCount = (await query('SELECT COUNT(*)::int AS c FROM soul')).rows[0].c;
+      const pendingCount = (await query('SELECT COUNT(*)::int AS c FROM pending_confirm')).rows[0].c;
       let accessPending = 0;
       try {
-        accessPending = db.prepare(`SELECT COUNT(*) as c FROM telegram_users WHERE status = 'pending'`).get().c;
+        accessPending = (
+          await query(`SELECT COUNT(*)::int AS c FROM telegram_users WHERE status = 'pending'`)
+        ).rows[0].c;
       } catch {
         /* table missing before migrate */
       }
@@ -650,30 +1068,30 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/stats/llm-usage', (req, res) => {
+  app.get('/api/stats/llm-usage', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const provider = String(req.query?.provider || '').trim().toLowerCase();
       const providerFilter = provider || null;
-      res.json(getLlmUsageStats(providerFilter));
+      res.json(await getLlmUsageStats(providerFilter));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get('/api/access/users', (req, res) => {
+  app.get('/api/access/users', async (req, res) => {
     try {
       reloadConfig();
-      getDb();
+      await getPool();
       const status = req.query.status || null;
-      const rows = listTelegramUsers(status);
+      const rows = await listTelegramUsers(status);
       res.json({ users: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/access/set', (req, res) => {
+  app.post('/api/access/set', async (req, res) => {
     try {
       const b = req.body || {};
       const userId = Number(b.userId);
@@ -683,49 +1101,55 @@ export function createGuiApp() {
         res.status(400).json({ ok: false, error: 'Invalid userId' });
         return;
       }
-      if (status && !['approved', 'blocked', 'pending'].includes(status)) {
-        res.status(400).json({ ok: false, error: 'status must be approved, blocked, or pending' });
+      if (status) {
+        res.status(400).json({
+          ok: false,
+          error:
+            'Legacy access status is disabled. Use Settings → Access to invite or disable users on the allowlist.',
+        });
         return;
       }
-      if (!status && !hasUsername) {
+      if (!hasUsername) {
         res.status(400).json({ ok: false, error: 'No updates provided' });
         return;
       }
-      getDb();
-      if (status) setTelegramUserStatus(userId, status);
-      if (hasUsername) setTelegramUserName(userId, b.username);
+      await getPool();
+      await setTelegramUserName(userId, b.username);
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
     }
   });
 
-  app.post('/api/access/clear-all', (req, res) => {
+  app.post('/api/access/clear-all', async (req, res) => {
     try {
-      getDb();
-      clearTelegramAccessRecords();
-      res.json({ ok: true });
+      await getPool();
+      await clearTelegramAccessRecords();
+      res.json({
+        ok: true,
+        note: 'Cleared legacy telegram_users records only. To clear invites, use Access → Clear all on the allowlist.',
+      });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
   });
 
-  app.get('/api/memory/sessions', (req, res) => {
+  app.get('/api/memory/sessions', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const botId = req.query.botId != null && req.query.botId !== '' ? Number(req.query.botId) : null;
-      const scopedRows = Number.isFinite(botId)
-        ? getDb()
-            .prepare('SELECT id FROM telegram_identity_map WHERE bot_id = ?')
-            .all(botId)
-        : [];
+      const scopedR = Number.isFinite(botId)
+        ? await query('SELECT id FROM telegram_identity_map WHERE bot_id = $1', [botId])
+        : { rows: [] };
+      const scopedRows = scopedR.rows;
       const scopedSet = new Set(
         scopedRows.map((r) => SCOPED_USER_ID_OFFSET + Number(r.id)).filter((n) => Number.isFinite(n))
       );
+      const chatIds = await listChatUserIds();
       const fromChat = Number.isFinite(botId)
-        ? listChatUserIds().filter((id) => scopedSet.has(Number(id)))
-        : listChatUserIds();
-      const soulRows = listSouls(Number.isFinite(botId) ? { botId } : {});
+        ? chatIds.filter((id) => scopedSet.has(Number(id)))
+        : chatIds;
+      const soulRows = await listSouls(Number.isFinite(botId) ? { botId } : {});
       const fromSoul = soulRows.map((s) => s.user_id);
       const set = new Set([...fromChat, ...fromSoul]);
       if (!Number.isFinite(botId)) {
@@ -736,7 +1160,7 @@ export function createGuiApp() {
         if (b === GUI_CONSOLE_USER_ID) return 1;
         return a - b;
       });
-      const labels = getTelegramLabelsForUserIds(ids);
+      const labels = await getTelegramLabelsForUserIds(ids);
       const sessions = ids.map((userId) => ({
         userId,
         label:
@@ -750,21 +1174,21 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/soul/:userId', (req, res) => {
+  app.get('/api/soul/:userId', async (req, res) => {
     try {
       const userId = Number(req.params.userId);
       if (!Number.isFinite(userId)) {
         res.status(400).json({ error: 'Invalid userId' });
         return;
       }
-      getDb();
-      res.json(getSoul(userId));
+      await getPool();
+      res.json(await getSoul(userId));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.put('/api/soul/:userId', (req, res) => {
+  app.put('/api/soul/:userId', async (req, res) => {
     try {
       const userId = Number(req.params.userId);
       if (!Number.isFinite(userId)) {
@@ -772,34 +1196,34 @@ export function createGuiApp() {
         return;
       }
       const b = req.body || {};
-      getDb();
-      setSoulContent(userId, {
+      await getPool();
+      await setSoulContent(userId, {
         display_name: b.display_name,
         profile: b.profile,
         botPersona: b.botPersona,
       });
-      res.json({ ok: true, soul: getSoul(userId) });
+      res.json({ ok: true, soul: await getSoul(userId) });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
     }
   });
 
-  app.post('/api/soul/:userId/clear', (req, res) => {
+  app.post('/api/soul/:userId/clear', async (req, res) => {
     try {
       const userId = Number(req.params.userId);
       if (!Number.isFinite(userId)) {
         res.status(400).json({ error: 'Invalid userId' });
         return;
       }
-      getDb();
-      clearSoul(userId);
+      await getPool();
+      await clearSoul(userId);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
   });
 
-  app.post('/api/soul/copy', (req, res) => {
+  app.post('/api/soul/copy', async (req, res) => {
     try {
       const fromUserId = Number((req.body || {}).fromUserId);
       const toUserId = Number((req.body || {}).toUserId);
@@ -807,15 +1231,15 @@ export function createGuiApp() {
         res.status(400).json({ ok: false, error: 'fromUserId and toUserId must be numbers' });
         return;
       }
-      getDb();
-      copySoulFromTo(fromUserId, toUserId);
-      res.json({ ok: true, soul: getSoul(toUserId) });
+      await getPool();
+      await copySoulFromTo(fromUserId, toUserId);
+      res.json({ ok: true, soul: await getSoul(toUserId) });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
     }
   });
 
-  app.post('/api/soul/copy-bot-persona', (req, res) => {
+  app.post('/api/soul/copy-bot-persona', async (req, res) => {
     try {
       const fromUserId = Number((req.body || {}).fromUserId);
       const toUserId = Number((req.body || {}).toUserId);
@@ -823,15 +1247,15 @@ export function createGuiApp() {
         res.status(400).json({ ok: false, error: 'fromUserId and toUserId must be numbers' });
         return;
       }
-      getDb();
-      copyBotPersonaFromTo(fromUserId, toUserId);
-      res.json({ ok: true, soul: getSoul(toUserId) });
+      await getPool();
+      await copyBotPersonaFromTo(fromUserId, toUserId);
+      res.json({ ok: true, soul: await getSoul(toUserId) });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
     }
   });
 
-  app.post('/api/memory/clear-all', (req, res) => {
+  app.post('/api/memory/clear-all', async (req, res) => {
     try {
       const confirm = String((req.body || {}).confirm || '').trim();
       if (confirm !== 'DELETE ALL') {
@@ -841,8 +1265,8 @@ export function createGuiApp() {
         });
         return;
       }
-      getDb();
-      clearAllStoredMemory();
+      await getPool();
+      await clearAllStoredMemory();
       logger.warn('clear-all-memory: wiped pending_confirm, chat_log, soul (events & user_records CASCADE)');
       res.json({ ok: true });
     } catch (e) {
@@ -850,53 +1274,54 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/data/souls', (req, res) => {
+  app.get('/api/data/souls', async (req, res) => {
     try {
       const botId = req.query.botId != null && req.query.botId !== '' ? Number(req.query.botId) : null;
-      const rows = listSouls(Number.isFinite(botId) ? { botId } : {});
+      const rows = await listSouls(Number.isFinite(botId) ? { botId } : {});
       res.json({ souls: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get('/api/memory/bots', (req, res) => {
+  app.get('/api/memory/bots', async (req, res) => {
     try {
-      getDb();
-      res.json({ bots: listKnownTelegramBots() });
+      await getPool();
+      const bots = await listConfiguredTelegramBots();
+      res.json({ bots });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get('/api/data/calendar', (req, res) => {
+  app.get('/api/data/calendar', async (req, res) => {
     try {
       const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 400));
-      const rows = listAllEvents(limit);
+      const rows = await listAllEvents(limit);
       res.json({ events: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.get('/api/data/pending', (req, res) => {
+  app.get('/api/data/pending', async (req, res) => {
     try {
-      const rows = listAllPending();
+      const rows = await listAllPending();
       res.json({ pending: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/data/calendar/delete', (req, res) => {
+  app.post('/api/data/calendar/delete', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const id = Number((req.body || {}).id);
       if (!Number.isFinite(id) || id < 1) {
         res.status(400).json({ ok: false, error: 'Valid event id is required.' });
         return;
       }
-      const ok = deleteEventById(id);
+      const ok = await deleteEventById(id);
       if (!ok) {
         res.status(404).json({ ok: false, error: 'No event with that id.' });
         return;
@@ -907,9 +1332,9 @@ export function createGuiApp() {
     }
   });
 
-  app.get('/api/data/records', (req, res) => {
+  app.get('/api/data/records', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const userId = Number(req.query.userId);
       if (!Number.isFinite(userId)) {
         res.status(400).json({ error: 'Query userId is required.' });
@@ -918,16 +1343,16 @@ export function createGuiApp() {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
       const rt = String(req.query.recordType || '').toLowerCase();
       const filter = rt === 'purchase' || rt === 'medicine' ? rt : null;
-      const rows = listUserRecords(userId, { limit, record_type: filter });
+      const rows = await listUserRecords(userId, { limit, record_type: filter });
       res.json({ records: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/data/records/delete', (req, res) => {
+  app.post('/api/data/records/delete', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const userId = Number((req.body || {}).userId);
       const id = Number((req.body || {}).id);
       if (!Number.isFinite(userId)) {
@@ -938,7 +1363,7 @@ export function createGuiApp() {
         res.status(400).json({ ok: false, error: 'Valid record id is required.' });
         return;
       }
-      const ok = deleteUserRecordById(userId, id);
+      const ok = await deleteUserRecordById(userId, id);
       if (!ok) {
         res.status(404).json({ ok: false, error: 'No record with that id for this user.' });
         return;
@@ -949,15 +1374,15 @@ export function createGuiApp() {
     }
   });
 
-  app.post('/api/data/pending/delete', (req, res) => {
+  app.post('/api/data/pending/delete', async (req, res) => {
     try {
-      getDb();
+      await getPool();
       const userId = Number((req.body || {}).userId);
       if (!Number.isFinite(userId)) {
         res.status(400).json({ ok: false, error: 'Valid userId is required.' });
         return;
       }
-      clearPending(userId);
+      await clearPending(userId);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -968,11 +1393,134 @@ export function createGuiApp() {
     res.json({ ok: true, cwd: projectRoot });
   });
 
+  app.get('/api/admin/allowlist', async (req, res) => {
+    try {
+      await getPool();
+      const rows = await listAllowlist();
+      res.json({ users: rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/admin/allowlist', async (req, res) => {
+    try {
+      await getPool();
+      const b = req.body || {};
+      const row = await inviteToAllowlist({
+        username: b.username,
+        telegramUserId: b.telegramUserId,
+        email: b.email,
+        notes: b.notes,
+      });
+      res.json({ ok: true, user: row });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.patch('/api/admin/allowlist/:id', async (req, res) => {
+    try {
+      await getPool();
+      const id = Number(req.params.id);
+      const b = req.body || {};
+      if (b.status) await setAllowlistStatus(id, String(b.status).toLowerCase());
+      await updateAllowlistEntry(id, {
+        username: b.username,
+        notes: b.notes,
+        telegramUserId: b.telegramUserId,
+        email: b.email,
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.delete('/api/admin/allowlist/:id', async (req, res) => {
+    try {
+      await getPool();
+      await deleteAllowlistEntry(Number(req.params.id));
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.post('/api/admin/allowlist/clear-all', async (req, res) => {
+    try {
+      await getPool();
+      await clearAllowlist();
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  app.get('/api/user/chat', async (req, res) => {
+    try {
+      await getPool();
+      const userId = req.session.soulUserId;
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
+      const rows = await listChatMessages({ userId, limit });
+      res.json({ messages: rows, userId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post('/api/user/chat/send', async (req, res) => {
+    try {
+      reloadConfig();
+      await getPool();
+      const cfg = getConfig();
+      const userId = req.session.soulUserId;
+      const text = String((req.body || {}).text ?? '').trim();
+      const imageDataUrl = String((req.body || {}).imageDataUrl ?? '').trim();
+      if (!text && !imageDataUrl) {
+        res.status(400).json({ ok: false, error: 'Message text or image is required.' });
+        return;
+      }
+      const userPreview = text || '[image]';
+      await appendChatMessage(userId, 'user', userPreview);
+      const startedAt = Date.now();
+      try {
+        const out = imageDataUrl
+          ? await handleImageMessage(userId, text, imageDataUrl)
+          : await handleTextMessage(userId, text);
+        await appendChatMessage(userId, 'assistant', out.reply);
+        scheduleMemorySummaryRefresh(userId);
+        res.json({
+          ok: true,
+          reply: out.reply,
+          meta: {
+            elapsedMs: Date.now() - startedAt,
+            provider: String(cfg.llmProvider || '').trim() || 'unknown',
+            model: String(cfg.llmModel || '').trim() || 'unknown',
+          },
+        });
+      } catch (e) {
+        const errText = `Error: ${e.message}`;
+        await appendChatMessage(userId, 'assistant', errText);
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
   return app;
 }
 
+/** @deprecated Use createApiApp — kept for imports that expect the old name. */
+export function createGuiApp() {
+  return createApiApp();
+}
+
 export async function startGuiServer(port) {
-  const app = createGuiApp();
+  await getPool();
+  await initAuth();
+  const app = createApiApp();
   const host = String(process.env.GUI_HOST || '0.0.0.0').trim() || '0.0.0.0';
   const bindHost = host.toLowerCase() === 'localhost' ? '127.0.0.1' : host;
   const logHost = bindHost === '0.0.0.0' ? '127.0.0.1' : bindHost;

@@ -3,27 +3,47 @@
  * The LLM often lacks "today"; we inject context and fall back when ISO is missing/invalid.
  */
 
-/** Short labels for prompts + debugging. */
-export function getCalendarClockContext() {
+import { normalizeTimezone } from '../util/timezone.js';
+
+function ymdInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const y = parts.find((p) => p.type === 'year')?.value;
+  const m = parts.find((p) => p.type === 'month')?.value;
+  const d = parts.find((p) => p.type === 'day')?.value;
+  return y && m && d ? `${y}-${m}-${d}` : null;
+}
+
+/**
+ * Short labels for prompts + debugging.
+ * @param {{ timezone?: string|null }} [options] IANA zone; defaults to server local zone.
+ */
+export function getCalendarClockContext(options = {}) {
   const now = new Date();
-  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local';
-  const localLong = now.toLocaleString(undefined, {
+  const tz =
+    normalizeTimezone(options.timezone) ||
+    Intl.DateTimeFormat().resolvedOptions().timeZone ||
+    'UTC';
+  const localLong = now.toLocaleString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
+    timeZone: tz,
     timeZoneName: 'short',
   });
-  const ymd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    now.getDate()
-  ).padStart(2, '0')}`;
+  const localDateYmd = ymdInTimeZone(now, tz) || `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}-${String(now.getUTCDate()).padStart(2, '0')}`;
   return {
     iso: now.toISOString(),
     localLong,
     tz,
-    localDateYmd: ymd,
+    localDateYmd,
   };
 }
 

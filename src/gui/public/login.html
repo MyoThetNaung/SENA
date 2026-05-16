@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SENA — Sign in</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .auth-wrap {
+        max-width: 420px;
+        margin: 4rem auto;
+        padding: 2rem;
+      }
+      .auth-lead {
+        color: #94a3b8;
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+      }
+      .auth-error {
+        color: #f87171;
+        margin-top: 1rem;
+        min-height: 1.25rem;
+      }
+      .auth-links {
+        margin-top: 1.5rem;
+        font-size: 0.9rem;
+      }
+      .auth-links a {
+        color: #60a5fa;
+      }
+      .btn-google {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.65rem;
+        width: 100%;
+        padding: 0.7rem 1rem;
+        border-radius: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: #f8fafc;
+        color: #0f172a;
+        font-size: 0.9375rem;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .btn-google:hover {
+        background: #fff;
+      }
+      .btn-contact-admin {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        margin-top: 0.75rem;
+        padding: 0.65rem 1rem;
+        border-radius: 8px;
+        border: 1px solid rgba(56, 189, 248, 0.45);
+        background: rgba(14, 165, 233, 0.12);
+        color: #7dd3fc;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .btn-contact-admin:hover {
+        background: rgba(14, 165, 233, 0.22);
+        color: #bae6fd;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="auth-wrap card">
+      <h1>SENA</h1>
+      <p class="auth-lead">
+        Sign in with the Google account your administrator invited. Only pre-registered
+        <strong>email addresses</strong> can access the app.
+      </p>
+      <a id="btnGoogle" href="/api/auth/google" class="btn-google" hidden>Continue with Google</a>
+      <a id="btnContactAdmin" class="btn-contact-admin" href="#" target="_blank" rel="noopener noreferrer" hidden>Contact SENA Admin</a>
+      <p class="auth-error" id="loginError"></p>
+      <p class="auth-links">
+        <a href="/admin-login.html">Admin sign in (email)</a>
+      </p>
+    </div>
+    <script>
+      async function boot() {
+        const errEl = document.getElementById('loginError');
+        const params = new URLSearchParams(location.search);
+        if (params.get('error')) errEl.textContent = params.get('error');
+
+        const me = await fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json());
+        if (me.authenticated && me.role === 'user') {
+          location.href = '/app';
+          return;
+        }
+        const cfg = await fetch('/api/auth/login-config').then((r) => r.json());
+        const btn = document.getElementById('btnGoogle');
+        if (cfg.googleConfigured) {
+          btn.hidden = false;
+        } else if (!params.get('error')) {
+          errEl.textContent =
+            'Google Sign-In is not configured. Ask admin to set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.';
+        }
+        const contact = document.getElementById('btnContactAdmin');
+        if (cfg.adminTelegram?.url) {
+          contact.href = cfg.adminTelegram.url;
+          contact.textContent = cfg.adminTelegram.label || 'Contact SENA Admin';
+          contact.hidden = false;
+        }
+      }
+      boot();
+    </script>
+  </body>
+</html>

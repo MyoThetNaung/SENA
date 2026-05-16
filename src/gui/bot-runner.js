@@ -1,6 +1,6 @@
 import { createBot } from '../bot/telegram.js';
 import { assertBotConfigReady, getConfig, reloadConfig } from '../config.js';
-import { getDb } from '../db.js';
+import { getPool } from '../db.js';
 import {
   startLlamaServerIfConfigured,
   stopLlamaServerIfWeStarted,
@@ -12,13 +12,21 @@ let botInstances = [];
 let starting = false;
 
 export function getBotStatus() {
-  return { running: botInstances.length > 0, starting, botCount: botInstances.length };
+  reloadConfig();
+  const configuredBotCount = Array.isArray(getConfig().telegramBotTokens)
+    ? getConfig().telegramBotTokens.length
+    : 0;
+  const runningBotCount = botInstances.length;
+  return {
+    running: runningBotCount > 0,
+    starting,
+    botCount: runningBotCount,
+    configuredBotCount,
+    needsRestart: runningBotCount > 0 && runningBotCount !== configuredBotCount,
+  };
 }
 
 export async function startBotFromGui() {
-  if (botInstances.length > 0) {
-    return { ok: false, error: 'Bot is already running.' };
-  }
   if (starting) {
     return { ok: false, error: 'Bot is already starting.' };
   }
@@ -26,7 +34,18 @@ export async function startBotFromGui() {
   try {
     reloadConfig();
     assertBotConfigReady();
-    getDb();
+    const tokens = getConfig().telegramBotTokens || [];
+    if (botInstances.length > 0) {
+      if (botInstances.length === tokens.length) {
+        return {
+          ok: false,
+          error: 'All configured bots are already running. Stop the bot, add tokens, then start again.',
+        };
+      }
+      logger.info('Bot token list changed — restarting all Telegram bots…');
+      await stopBotFromGui();
+    }
+    await getPool();
     const llama = await startLlamaServerIfConfigured(true);
     if (!llama.ok) {
       return { ok: false, error: llama.error || 'Could not start llama-server' };
@@ -36,14 +55,13 @@ export async function startBotFromGui() {
       await stopLlamaServerIfWeStarted().catch(() => {});
       return { ok: false, error: reach.error || 'llama-server unreachable' };
     }
-    const tokens = getConfig().telegramBotTokens || [];
     const created = [];
     for (let i = 0; i < tokens.length; i += 1) {
       const bot = await createBot(tokens[i], i);
       created.push(bot);
     }
     botInstances = created;
-    return { ok: true, botCount: botInstances.length };
+    return { ok: true, botCount: botInstances.length, configuredBotCount: tokens.length };
   } catch (e) {
     logger.error(`GUI start bot: ${e.message}`);
     for (const b of botInstances) {

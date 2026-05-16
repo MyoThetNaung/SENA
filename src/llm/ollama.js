@@ -1,9 +1,10 @@
-import { getConfig } from '../config.js';
+import { getConfig, isLlamaServerRemote } from '../config.js';
+import { fetchLlamaServer, llamaServerAuthHeaders } from './llamaServerClient.js';
 import { getBotIdForScopedUserId } from '../access/telegramAccess.js';
 import { getSoul } from '../memory/soul.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
-import { startLlamaServerIfConfigured } from './llamaProcess.js';
+import { startLlamaServerIfConfigured, ensureLlamaServerReachable } from './llamaProcess.js';
 import { recordLlmUsage } from './tokenUsage.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import { sanitizeChatCompletionText, CHAT_TEMPLATE_STOP_SEQUENCES } from './sanitizeCompletion.js';
@@ -25,9 +26,9 @@ Use tools when needed.
 Do not hallucinate.
 Ask for confirmation before performing actions.`;
 
-function mergeBotPersonaForUserId(userId) {
+async function mergeBotPersonaForUserId(userId) {
   const cfg = getConfig();
-  const botId = getBotIdForScopedUserId(userId);
+  const botId = await getBotIdForScopedUserId(userId);
   const globalByBot =
     botId != null && cfg.botPersonaByBotId && typeof cfg.botPersonaByBotId === 'object'
       ? cfg.botPersonaByBotId[String(botId)] || {}
@@ -35,7 +36,7 @@ function mergeBotPersonaForUserId(userId) {
   const global = Object.keys(globalByBot).length ? globalByBot : cfg.botPersona || {};
   const uid = Number(userId);
   if (!Number.isFinite(uid)) return { ...global };
-  const soul = getSoul(uid);
+  const soul = await getSoul(uid);
   const raw = soul.preferences?.botPersona;
   const local = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const keys = ['displayName', 'displayNameMy', 'gender', 'style', 'role', 'addressUserEn', 'addressUserMy'];
@@ -106,8 +107,8 @@ function runtimeLlmIdentityBlock() {
 }
 
 /** @param {number} [userId] Chat / Telegram user id — per-soul bot persona overrides global settings when set. */
-export function baseSystemPrompt(userId) {
-  const persona = formatBotPersonaBlock(mergeBotPersonaForUserId(userId));
+export async function baseSystemPrompt(userId) {
+  const persona = formatBotPersonaBlock(await mergeBotPersonaForUserId(userId));
   let s = BASE_SYSTEM;
   if (persona) s += `\n\n---\n${persona}`;
   s += runtimeLlmIdentityBlock();
@@ -252,9 +253,8 @@ async function llamaServerChatWithUsage(messages, options = {}) {
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   const t0 = Date.now();
   try {
-    const res = await fetch(url, {
+    const res = await fetchLlamaServer(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
@@ -294,7 +294,7 @@ export async function chat(messages, options = {}) {
 
   if (provider === 'openai') {
     const r = await openaiChatWithUsage(messages, options);
-    recordLlmUsage({
+    void recordLlmUsage({
       provider: 'openai',
       model,
       promptTokens: r.promptTokens,
@@ -305,7 +305,7 @@ export async function chat(messages, options = {}) {
   }
   if (provider === 'openrouter') {
     const r = await openrouterChatWithUsage(messages, options);
-    recordLlmUsage({
+    void recordLlmUsage({
       provider: 'openrouter',
       model,
       promptTokens: r.promptTokens,
@@ -316,7 +316,7 @@ export async function chat(messages, options = {}) {
   }
   if (provider === 'gemini') {
     const r = await geminiChatWithUsage(messages, options);
-    recordLlmUsage({
+    void recordLlmUsage({
       provider: 'gemini',
       model,
       promptTokens: r.promptTokens,
@@ -327,15 +327,20 @@ export async function chat(messages, options = {}) {
   }
 
   if (provider === 'llama-server') {
-    const llama = await startLlamaServerIfConfigured(true);
-    if (!llama.ok) {
-      throw new Error(
-        llama.error ||
-          'llama-server could not start or switch to the GGUF for the active model. Save settings, then try again.'
-      );
+    if (!isLlamaServerRemote()) {
+      const llama = await startLlamaServerIfConfigured(true);
+      if (!llama.ok) {
+        throw new Error(
+          llama.error ||
+            'llama-server could not start or switch to the GGUF for the active model. Save settings, then try again.'
+        );
+      }
+    } else {
+      const reach = await ensureLlamaServerReachable();
+      if (!reach.ok) throw new Error(reach.error);
     }
     const r = await llamaServerChatWithUsage(messages, options);
-    recordLlmUsage({
+    void recordLlmUsage({
       provider: 'llama-server',
       model,
       promptTokens: r.promptTokens,
@@ -364,7 +369,7 @@ export async function chat(messages, options = {}) {
   const durationMs = Date.now() - t0;
   const promptTokens = Number(data.prompt_eval_count) || 0;
   const completionTokens = Number(data.eval_count) || 0;
-  recordLlmUsage({
+  void recordLlmUsage({
     provider: 'ollama',
     model,
     promptTokens,
@@ -391,6 +396,18 @@ export async function* chatStream(messages, options = {}) {
   const stop = Array.isArray(options.stop) && options.stop.length ? options.stop : CHAT_TEMPLATE_STOP_SEQUENCES;
 
   if (provider === 'llama-server') {
+    if (!isLlamaServerRemote()) {
+      const llama = await startLlamaServerIfConfigured(true);
+      if (!llama.ok) {
+        throw new Error(
+          llama.error ||
+            'llama-server could not start or switch to the GGUF for the active model. Save settings, then try again.'
+        );
+      }
+    } else {
+      const reach = await ensureLlamaServerReachable();
+      if (!reach.ok) throw new Error(reach.error);
+    }
     yield* llamaServerChatStream(messages, { ...options, model, timeoutMs, stop });
     return;
   }
@@ -463,7 +480,7 @@ async function* llamaServerChatStream(messages, options = {}) {
   };
   if (options.temperature !== undefined) body.temperature = options.temperature;
   yield* openAiCompatibleChatStream(url, body, {
-    headers: {},
+    headers: llamaServerAuthHeaders(),
     timeoutMs: options.timeoutMs ?? 120000,
   });
 }
@@ -572,9 +589,10 @@ export async function classifyIntent(userMessage) {
       '- CALENDAR: timed appointments, meetings, reminders on the calendar, or what is on their schedule at a date/time.\n' +
       '- NOTEBOOK: ADD one row, DELETE row, EXPLICIT full-table list, or multi-line pasted buying/inventory list.\n' +
       'Reply with only one word.';
+  /* Local llama-server can take a long time on first token (large GGUF, Metal load, n_slots). */
   const text = await chat(
     [{ role: 'system', content: system }, { role: 'user', content: userMessage.slice(0, 2000) }],
-    { timeoutMs: 45000, temperature: 0 }
+    { timeoutMs: 120000, temperature: 0 }
   );
   const u = text.toUpperCase();
   if (webSearchEnabled && u.includes('SEARCH')) return 'SEARCH';
@@ -583,8 +601,8 @@ export async function classifyIntent(userMessage) {
   return 'CHAT';
 }
 
-export async function parseUserRecordRequest(userMessage) {
-  const ck = getCalendarClockContext();
+export async function parseUserRecordRequest(userMessage, clockContext = null) {
+  const ck = clockContext || getCalendarClockContext();
   const raw = await chat(
     [
       {
@@ -619,8 +637,8 @@ export async function parseUserRecordRequest(userMessage) {
  * Extract many product/purchase lines from a pasted table or numbered list (inventory, buying list).
  * Returns { occurred_on?, currency?, items: [...] }. Empty items if the message is not a product list.
  */
-export async function parseBulkPurchaseLines(userMessage) {
-  const ck = getCalendarClockContext();
+export async function parseBulkPurchaseLines(userMessage, clockContext = null) {
+  const ck = clockContext || getCalendarClockContext();
   const raw = await chat(
     [
       {
@@ -659,8 +677,8 @@ export async function parseBulkPurchaseLines(userMessage) {
   }
 }
 
-export async function parseCalendarRequest(userMessage) {
-  const ck = getCalendarClockContext();
+export async function parseCalendarRequest(userMessage, clockContext = null) {
+  const ck = clockContext || getCalendarClockContext();
   const raw = await chat(
     [
       {
@@ -679,7 +697,7 @@ export async function parseCalendarRequest(userMessage) {
       },
       { role: 'user', content: userMessage.slice(0, 8000) },
     ],
-    { timeoutMs: 60000, temperature: 0 }
+    { timeoutMs: 180000, temperature: 0 }
   );
   try {
     const cleaned = raw.replace(/```json|```/g, '').trim();
@@ -693,8 +711,8 @@ export async function parseCalendarRequest(userMessage) {
 /**
  * Many time blocks (e.g. Mon–Sun weekly grid). Returns { events: [{ title, starts_at }, ...] }.
  */
-export async function parseBulkCalendarSchedule(userMessage) {
-  const ck = getCalendarClockContext();
+export async function parseBulkCalendarSchedule(userMessage, clockContext = null) {
+  const ck = clockContext || getCalendarClockContext();
   const raw = await chat(
     [
       {

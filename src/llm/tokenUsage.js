@@ -1,4 +1,4 @@
-import { getDb } from '../db.js';
+import { query } from '../db.js';
 
 /** Local calendar day YYYY-MM-DD (for bucketing metrics). */
 export function localDayKey(d = new Date()) {
@@ -23,26 +23,18 @@ function tokensPerSec(row) {
  * @param {number} p.completionTokens
  * @param {number} p.durationMs
  */
-export function recordLlmUsage(p) {
+export async function recordLlmUsage(p) {
   try {
-    const db = getDb();
     const now = new Date();
     const dayKey = localDayKey(now);
     const createdAt = now.toISOString();
     const promptTokens = Math.max(0, Math.floor(Number(p.promptTokens) || 0));
     const completionTokens = Math.max(0, Math.floor(Number(p.completionTokens) || 0));
     const durationMs = Math.max(0, Math.floor(Number(p.durationMs) || 0));
-    db.prepare(
+    await query(
       `INSERT INTO llm_usage (created_at, day_key, provider, model, prompt_tokens, completion_tokens, duration_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      createdAt,
-      dayKey,
-      String(p.provider || ''),
-      String(p.model || ''),
-      promptTokens,
-      completionTokens,
-      durationMs
+       VALUES ($1::timestamptz, $2, $3, $4, $5, $6, $7)`,
+      [createdAt, dayKey, String(p.provider || ''), String(p.model || ''), promptTokens, completionTokens, durationMs]
     );
   } catch {
     /* never break chat if metrics fail */
@@ -61,64 +53,64 @@ function dayKeysLastNDays(n) {
   return keys;
 }
 
-export function getLlmUsageStats(provider = null) {
-  const db = getDb();
-  const providerSql = provider ? ' WHERE provider = ?' : '';
+export async function getLlmUsageStats(provider = null) {
+  const providerSql = provider ? ' WHERE provider = $1' : '';
   const providerArgs = provider ? [String(provider)] : [];
-  const totalRow = db
-    .prepare(
-      `SELECT 
-        COALESCE(SUM(prompt_tokens), 0) as prompt_sum,
-        COALESCE(SUM(completion_tokens), 0) as completion_sum,
-        COUNT(*) as n
-       FROM llm_usage${providerSql}`
-    )
-    .get(...providerArgs);
-  const totalTokens = (totalRow.prompt_sum || 0) + (totalRow.completion_sum || 0);
+  const totalR = await query(
+    `SELECT 
+      COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_sum,
+      COALESCE(SUM(completion_tokens), 0)::bigint AS completion_sum,
+      COUNT(*)::int AS n
+     FROM llm_usage${providerSql}`,
+    providerArgs
+  );
+  const totalRow = totalR.rows[0];
+  const totalTokens = Number(totalRow.prompt_sum || 0) + Number(totalRow.completion_sum || 0);
   const todayKey = localDayKey();
-  const todayRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as t
-       FROM llm_usage WHERE day_key = ?${provider ? ' AND provider = ?' : ''}`
-    )
-    .get(todayKey, ...providerArgs);
-  const todayTokens = todayRow?.t ?? 0;
+  const todayArgs = provider ? [todayKey, String(provider)] : [todayKey];
+  const todaySql = provider
+    ? `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS t
+       FROM llm_usage WHERE day_key = $1 AND provider = $2`
+    : `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS t
+       FROM llm_usage WHERE day_key = $1`;
+  const todayR = await query(todaySql, todayArgs);
+  const todayTokens = Number(todayR.rows[0]?.t ?? 0);
 
-  const last = db
-    .prepare(`SELECT * FROM llm_usage${providerSql} ORDER BY id DESC LIMIT 1`)
-    .get(...providerArgs);
+  const lastR = await query(`SELECT * FROM llm_usage${providerSql} ORDER BY id DESC LIMIT 1`, providerArgs);
+  const last = lastR.rows[0];
   const lastTokensPerSec = last ? tokensPerSec(last) : null;
 
-  const recent = db
-    .prepare(
-      `SELECT prompt_tokens, completion_tokens, duration_ms FROM llm_usage
-       WHERE duration_ms >= 50 AND (prompt_tokens + completion_tokens) > 0${
-         provider ? ' AND provider = ?' : ''
-       }
-       ORDER BY id DESC LIMIT 80`
-    )
-    .all(...providerArgs);
-  const tpsVals = recent.map((r) => tokensPerSec(r)).filter((v) => v != null);
+  const recentR = await query(
+    `SELECT prompt_tokens, completion_tokens, duration_ms FROM llm_usage
+     WHERE duration_ms >= 50 AND (prompt_tokens + completion_tokens) > 0${
+       provider ? ' AND provider = $1' : ''
+     }
+     ORDER BY id DESC LIMIT 80`,
+    providerArgs
+  );
+  const tpsVals = recentR.rows.map((row) => tokensPerSec(row)).filter((v) => v != null);
   const avgTokensPerSec = tpsVals.length ? tpsVals.reduce((a, b) => a + b, 0) / tpsVals.length : null;
 
   const keys14 = dayKeysLastNDays(14);
-  const daily = keys14.map((day) => {
-    const r = db
-      .prepare(
-        `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) as t
-         FROM llm_usage WHERE day_key = ?${provider ? ' AND provider = ?' : ''}`
-      )
-      .get(day, ...providerArgs);
-    const tokens = r?.t ?? 0;
+  const daily = [];
+  for (const day of keys14) {
+    const dayArgs = provider ? [day, String(provider)] : [day];
+    const daySql = provider
+      ? `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS t
+         FROM llm_usage WHERE day_key = $1 AND provider = $2`
+      : `SELECT COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS t
+         FROM llm_usage WHERE day_key = $1`;
+    const dr = await query(daySql, dayArgs);
+    const tokens = Number(dr.rows[0]?.t ?? 0);
     const short = day.slice(5);
-    return { day, label: short, tokens };
-  });
+    daily.push({ day, label: short, tokens });
+  }
 
   return {
     totalTokens,
     todayTokens,
-    promptTotal: totalRow.prompt_sum || 0,
-    completionTotal: totalRow.completion_sum || 0,
+    promptTotal: Number(totalRow.prompt_sum || 0),
+    completionTotal: Number(totalRow.completion_sum || 0),
     requestCount: totalRow.n || 0,
     lastTokensPerSec,
     lastDurationMs: last?.duration_ms ?? null,

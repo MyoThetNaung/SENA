@@ -11,11 +11,11 @@ const MAX_SUMMARY = 4000;
  * Runs after turns; failures are logged only.
  */
 export async function refreshConversationMemorySummary(userId) {
-  ensureSoul(userId);
-  const rows = listChatMessages({ userId, limit: 80 });
+  await ensureSoul(userId);
+  const rows = await listChatMessages({ userId, limit: 80 });
   if (rows.length < 2) return;
 
-  const soul = getSoul(userId);
+  const soul = await getSoul(userId);
   const prev = String(soul.preferences?.profile?.memorySummary || '').trim();
 
   const transcript = rows
@@ -44,7 +44,7 @@ export async function refreshConversationMemorySummary(userId) {
     .trim()
     .slice(0, MAX_SUMMARY);
   if (!text) return;
-  mergeProfileMemorySummary(userId, text);
+  await mergeProfileMemorySummary(userId, text);
 }
 
 export function scheduleMemorySummaryRefresh(userId) {

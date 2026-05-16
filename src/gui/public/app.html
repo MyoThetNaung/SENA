@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SENA — Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .user-app {
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 1rem;
+      }
+      .chat-thread {
+        min-height: 320px;
+        max-height: 55vh;
+        overflow-y: auto;
+        margin: 1rem 0;
+        padding: 0.75rem;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.6);
+      }
+      .chat-line {
+        margin: 0.5rem 0;
+        line-height: 1.45;
+      }
+      .chat-line.user {
+        color: #93c5fd;
+      }
+      .chat-line.assistant {
+        color: #e2e8f0;
+      }
+      .chat-compose {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .chat-compose textarea {
+        flex: 1;
+        min-height: 4rem;
+        resize: vertical;
+      }
+      .top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="user-app card">
+      <div class="top-bar">
+        <h1>SENA Chat</h1>
+        <button type="button" class="ghost" id="btnLogout">Sign out</button>
+      </div>
+      <p class="hint" id="userHint"></p>
+      <div class="chat-thread" id="chatThread"></div>
+      <div class="chat-compose">
+        <textarea class="input" id="chatInput" placeholder="Message…"></textarea>
+        <button type="button" class="primary" id="btnSend">Send</button>
+      </div>
+      <p class="hint" id="statusLine"></p>
+    </div>
+    <script>
+      async function requireUser() {
+        const me = await fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json());
+        if (!me.authenticated || me.role !== 'user') {
+          location.href = '/login.html';
+          return null;
+        }
+        return me;
+      }
+
+      function renderMessages(messages) {
+        const el = document.getElementById('chatThread');
+        if (!messages.length) {
+          el.innerHTML = '<p class="hint">No messages yet. Say hello.</p>';
+          return;
+        }
+        el.innerHTML = messages
+          .map(
+            (m) =>
+              `<div class="chat-line ${m.role}"><strong>${m.role}:</strong> ${escapeHtml(
+                String(m.content || '')
+              )}</div>`
+          )
+          .join('');
+        el.scrollTop = el.scrollHeight;
+      }
+
+      function escapeHtml(s) {
+        return s
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function loadChat() {
+        const data = await fetch('/api/user/chat?limit=100', { credentials: 'include' }).then((r) =>
+          r.json()
+        );
+        if (data.error) throw new Error(data.error);
+        renderMessages(data.messages || []);
+      }
+
+      async function sendChat() {
+        const input = document.getElementById('chatInput');
+        const text = input.value.trim();
+        if (!text) return;
+        const status = document.getElementById('statusLine');
+        status.textContent = 'Thinking…';
+        input.value = '';
+        try {
+          const r = await fetch('/api/user/chat/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ text }),
+          });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.error || 'Send failed');
+          status.textContent = '';
+          await loadChat();
+        } catch (e) {
+          status.textContent = e.message;
+          input.value = text;
+        }
+      }
+
+      (async function () {
+        const me = await requireUser();
+        if (!me) return;
+        document.getElementById('userHint').textContent = `Signed in (session ${me.soulUserId})`;
+        document.getElementById('btnSend').addEventListener('click', () => sendChat());
+        document.getElementById('chatInput').addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' && !ev.shiftKey) {
+            ev.preventDefault();
+            sendChat();
+          }
+        });
+        document.getElementById('btnLogout').addEventListener('click', async () => {
+          await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+          location.href = '/login.html';
+        });
+        await loadChat();
+      })();
+    </script>
+  </body>
+</html>

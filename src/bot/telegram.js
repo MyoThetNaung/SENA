@@ -64,25 +64,25 @@ export async function createBot(token, index = 0) {
     const chatId = msg.chat?.id;
     if (!rawUserId || chatId == null) return;
     try {
-      userId = resolveScopedTelegramUserId(botId, msg.from);
+      userId = await resolveScopedTelegramUserId(botId, msg.from);
     } catch (e) {
       logger.error(`resolveScopedTelegramUserId failed: ${e.message}`);
       await bot.sendMessage(chatId, 'Could not open a scoped session for this account.').catch(() => {});
       return;
     }
 
-    const access = touchTelegramUser(userId, msg.from, previewFromMessage(msg), rawUserId);
-    if (access === 'blocked') {
+    const access = await touchTelegramUser(userId, msg.from, previewFromMessage(msg), rawUserId);
+    if (access === 'no_username') {
       await bot.sendMessage(
         chatId,
-        'Your access to this bot has been denied. If this is a mistake, contact the administrator.'
+        'Access requires a Telegram @username, or your admin must invite you by numeric user id. Set a username in Telegram Settings → Username, then ask your administrator to add you.'
       );
       return;
     }
-    if (access === 'pending') {
+    if (access === 'blocked') {
       await bot.sendMessage(
         chatId,
-        'Thanks for reaching out. Your access request is pending until an administrator approves it in the Control Panel. You will be able to chat after approval.'
+        'You are not on the invite list. Ask your administrator to add your Telegram @username before you can use this bot.'
       );
       return;
     }
@@ -105,16 +105,16 @@ export async function createBot(token, index = 0) {
         const imageDataUrl = `data:${mimeFromTelegramPath(largest.file_path)};base64,${buf.toString('base64')}`;
         const caption = String(msg.caption || '').trim();
         const userText = caption || '[photo]';
-        appendChatMessage(userId, 'user', userText);
+        await appendChatMessage(userId, 'user', userText);
         await bot.sendChatAction(chatId, 'typing');
         const out = await handleImageMessage(userId, caption, imageDataUrl);
         await bot.sendMessage(chatId, out.reply);
-        appendChatMessage(userId, 'assistant', out.reply);
+        await appendChatMessage(userId, 'assistant', out.reply);
         scheduleMemorySummaryRefresh(userId);
       } catch (e) {
         logger.error(`photo handler: ${e.message}`);
         const errText = `Error: ${e.message}`;
-        appendChatMessage(userId, 'assistant', errText);
+        await appendChatMessage(userId, 'assistant', errText);
         await bot.sendMessage(chatId, errText).catch(() => {});
       }
       return;
@@ -126,7 +126,7 @@ export async function createBot(token, index = 0) {
     }
 
     try {
-      appendChatMessage(userId, 'user', msg.text);
+      await appendChatMessage(userId, 'user', msg.text);
       await bot.sendChatAction(chatId, 'typing');
       const out = await handleTextMessage(userId, msg.text);
       const opts = {};
@@ -134,12 +134,12 @@ export async function createBot(token, index = 0) {
         opts.reply_markup = confirmKeyboard;
       }
       await bot.sendMessage(chatId, out.reply, opts);
-      appendChatMessage(userId, 'assistant', out.reply);
+      await appendChatMessage(userId, 'assistant', out.reply);
       scheduleMemorySummaryRefresh(userId);
     } catch (e) {
       logger.error(`message handler: ${e.message}`);
       const errText = `Error: ${e.message}`;
-      appendChatMessage(userId, 'assistant', errText);
+      await appendChatMessage(userId, 'assistant', errText);
       await bot.sendMessage(chatId, errText).catch(() => {});
     }
   });
@@ -151,36 +151,32 @@ export async function createBot(token, index = 0) {
     const qid = q.id;
     if (!rawUserId || chatId == null) return;
     try {
-      userId = resolveScopedTelegramUserId(botId, q.from);
+      userId = await resolveScopedTelegramUserId(botId, q.from);
     } catch (e) {
       logger.error(`resolveScopedTelegramUserId callback failed: ${e.message}`);
       await bot.answerCallbackQuery(qid, { text: 'Session error' }).catch(() => {});
       return;
     }
 
-    const access = touchTelegramUser(userId, q.from, '[callback]', rawUserId);
-    if (access === 'blocked') {
-      await bot.answerCallbackQuery(qid, { text: 'Access denied' }).catch(() => {});
-      return;
-    }
-    if (access === 'pending') {
-      await bot.answerCallbackQuery(qid, { text: 'Pending approval' }).catch(() => {});
+    const access = await touchTelegramUser(userId, q.from, '[callback]', rawUserId);
+    if (access === 'blocked' || access === 'no_username') {
+      await bot.answerCallbackQuery(qid, { text: 'Not invited' }).catch(() => {});
       return;
     }
 
     const accepted = q.data === 'yes';
     try {
       await bot.answerCallbackQuery(qid);
-      appendChatMessage(userId, 'user', accepted ? '[Confirm: Yes]' : '[Confirm: No]');
+      await appendChatMessage(userId, 'user', accepted ? '[Confirm: Yes]' : '[Confirm: No]');
       await bot.sendChatAction(chatId, 'typing');
       const out = await handleConfirmCallback(userId, accepted);
       await bot.sendMessage(chatId, out.reply);
-      appendChatMessage(userId, 'assistant', out.reply);
+      await appendChatMessage(userId, 'assistant', out.reply);
       scheduleMemorySummaryRefresh(userId);
     } catch (e) {
       logger.error(`callback handler: ${e.message}`);
       const errText = `Error: ${e.message}`;
-      appendChatMessage(userId, 'assistant', errText);
+      await appendChatMessage(userId, 'assistant', errText);
       await bot.sendMessage(chatId, errText).catch(() => {});
     }
   });

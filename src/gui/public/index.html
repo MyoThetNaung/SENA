@@ -156,6 +156,9 @@
                 <span>Start</span>
               </label>
             </div>
+            <button type="button" id="btnAdminLogout" class="btn-mini ghost sidebar-logout-btn">
+              Sign out
+            </button>
           </div>
           <footer class="sidebar-footer" aria-label="Credits">
             <div class="sidebar-footer-graphic" aria-hidden="true">
@@ -379,7 +382,7 @@
               <div class="status-card-label">LLM backend</div>
               <div id="overviewLlmBackend" class="status-card-value">…</div>
             </div>
-            <div class="status-card status-card--compact">
+            <div class="status-card status-card--compact" id="overviewCardActiveModel">
               <div class="status-card-label">Active model</div>
               <div id="overviewActiveModel" class="status-card-value">…</div>
             </div>
@@ -494,8 +497,8 @@
             </p>
             <label>LLM backend</label>
             <select id="llmProvider">
-              <option value="ollama">Ollama (local)</option>
               <option value="llama-server">llama.cpp server — local OpenAI-compatible API</option>
+              <option value="ollama">Ollama (local)</option>
               <option value="openai">OpenAI — ChatGPT API (cloud)</option>
               <option value="openrouter">OpenRouter API (cloud)</option>
               <option value="gemini">Google Gemini API (cloud)</option>
@@ -524,14 +527,93 @@
               <input type="text" id="ollamaBaseUrl" />
             </div>
             <div id="wrapLlama" class="hidden">
-              <label>llama-server base URL</label>
-              <input type="text" id="llamaServerUrl" placeholder="http://127.0.0.1:8080" />
+              <label>llama.cpp connection</label>
+              <select id="llamaServerMode">
+                <option value="local">Local — embedded llama-server on this machine</option>
+                <option value="remote">Remote / online — existing llama.cpp server URL</option>
+              </select>
+              <label>Server base URL</label>
+              <input
+                type="text"
+                id="llamaServerUrl"
+                placeholder="http://127.0.0.1:8080 or https://your-host.example.com"
+              />
+              <div id="wrapLlamaRemoteAuth" class="hidden">
+                <label>API key (optional)</label>
+                <input
+                  type="password"
+                  id="llamaServerApiKey"
+                  autocomplete="off"
+                  placeholder="Bearer token if your host requires auth"
+                />
+                <p class="hint" id="llamaServerApiKeyHint"></p>
+              </div>
+              <div id="wrapLlamaRemoteModels" class="hidden">
+                <label>Active model (from server)</label>
+                <div class="row">
+                  <select id="llmModelRemote" class="llm-model-select"></select>
+                  <button type="button" id="btnRefreshRemoteModels" class="primary ghost">Refresh</button>
+                </div>
+                <p class="hint" id="llamaRemoteModelsHint">
+                  Models are loaded from the remote server <code>/v1/models</code> endpoint.
+                </p>
+              </div>
             </div>
+            <div id="localLlmActions" class="row">
+              <button type="button" id="btnTestLocalLlm" class="primary ghost">Test Connection</button>
+              <button type="button" id="btnStartEmbeddedServer" class="primary ghost hidden">Start Embedded Server</button>
+            </div>
+            <p id="localLlmTestHint" class="hint">
+              For local backends, test the current base URL before saving.
+            </p>
 
-            <label>Active model</label>
-            <div class="row">
-              <select id="llmModel"></select>
-              <button type="button" id="btnRefreshModels" class="primary ghost">Refresh list</button>
+            <div id="wrapLlamaLocalModels">
+              <div class="embedded-server-panel" id="embeddedServerPanel">
+                <div class="embedded-status-row">
+                  <span class="embedded-status-label">Embedded llama-server</span>
+                  <span
+                    id="embeddedServerStatusBadge"
+                    class="embedded-status-badge embedded-status--offline"
+                    role="status"
+                    >Offline</span>
+                </div>
+                <p class="hint embedded-status-hint" id="embeddedServerStatusDetail"></p>
+              </div>
+              <label>Main model (.gguf) — full file path</label>
+              <div class="row">
+                <button type="button" id="btnPickGgufFile" class="primary ghost">Choose file…</button>
+              </div>
+              <input
+                type="text"
+                class="mono-path-readout"
+                id="displayMainModelPath"
+                value=""
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="/absolute/path/to/model.gguf — use Choose file… or paste a path"
+                title="Full path to the main GGUF weights (editable)"
+              />
+              <p class="hint" id="selectedGgufLabel">No local model file selected yet.</p>
+              <label>Multimodal projector (optional — .mmproj or mmproj .gguf) — full file path</label>
+              <div class="row">
+                <button type="button" id="btnPickMmprojFile" class="primary ghost">Choose file…</button>
+                <button type="button" id="btnClearMmproj" class="primary ghost">Clear</button>
+              </div>
+              <input
+                type="text"
+                class="mono-path-readout"
+                id="displayMmprojPath"
+                value=""
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="/absolute/path/to/mmproj.mmproj — optional, for vision models"
+                title="Full path to the vision projector file (editable)"
+              />
+              <p class="hint" id="selectedMmprojLabel">None — add an mmproj .gguf for multimodal (images).</p>
+              <select id="llmModel" hidden></select>
+              <input type="hidden" id="modelsDir" />
+              <input type="hidden" id="ggufPath" />
+              <input type="hidden" id="mmprojPath" />
             </div>
             <div class="engine-save-actions">
               <button type="button" id="btnSave">Save settings</button>
@@ -601,14 +683,27 @@
             </div>
           </h1>
           <p class="lead">
-            When someone messages your bot for the first time, they appear here as <strong>pending</strong>. Approve to
-            let them chat, or deny to block.
+            Invite users by <strong>Google email</strong> for web sign-in, and/or by Telegram <strong>@username</strong>
+            (or numeric user id) for the bot. They can only sign in after you add them here.
           </p>
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Invite user</h2>
+            <label>Google email (web login)</label>
+            <input type="email" id="inviteEmail" class="input" placeholder="user@example.com" />
+            <label>Telegram @username (bot)</label>
+            <input type="text" id="inviteUsername" class="input" placeholder="username without @" />
+            <label>Telegram user id (optional)</label>
+            <input type="text" id="inviteTelegramId" class="input" placeholder="e.g. 123456789" />
+            <label>Notes (optional)</label>
+            <input type="text" id="inviteNotes" class="input" />
+            <button type="button" id="btnInviteUser" class="primary" style="margin-top: 0.75rem">Add invite</button>
+          </div>
           <div class="toolbar">
             <button type="button" id="btnRefreshAccess" class="primary ghost">Refresh</button>
-            <button type="button" id="btnClearAccessAll" class="danger ghost">Clear all access data</button>
+            <button type="button" id="btnClearAccessAll" class="danger ghost">Clear all invites</button>
+            <a href="/login.html" class="btn-mini ghost">User login</a>
           </div>
-          <h2>Pending approval</h2>
+          <h2>Invited (not signed in yet)</h2>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -624,7 +719,7 @@
               <tbody id="accessPendingBody"></tbody>
             </table>
           </div>
-          <h2>Approved</h2>
+          <h2>Active</h2>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -638,7 +733,7 @@
               <tbody id="accessApprovedBody"></tbody>
             </table>
           </div>
-          <h2>Blocked</h2>
+          <h2>Disabled</h2>
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -668,14 +763,20 @@
           </h1>
 
           <div class="toolbar mem-toolbar mem-toolbar-session">
-            <div class="mem-bot-tabs-wrap">
-              <div class="mem-bot-tabs-label">Bots</div>
-              <div id="memBotTabs" class="mem-bot-tabs" role="tablist" aria-label="Telegram bots"></div>
-            </div>
-            <div class="session-select-wrap">
-              <div class="session-select-row">
-                <label for="memSessionSelect">Session -</label>
-                <select id="memSessionSelect" class="chat-session-select"></select>
+                        <div class="mem-toolbar-grid">
+              <div class="mem-bot-select-wrap">
+                <label for="memBotSelect">Bot</label>
+                <select id="memBotSelect" class="chat-session-select" aria-label="Telegram bot"></select>
+              </div>
+              <div class="session-select-wrap">
+                <div class="session-select-row">
+                  <label for="memSessionSelect">Session</label>
+                  <select id="memSessionSelect" class="chat-session-select"></select>
+                </div>
+              </div>
+              <div class="mem-timezone-wrap">
+                <label for="memUserTimezone">User timezone</label>
+                <select id="memUserTimezone" class="chat-session-select" aria-label="User timezone"></select>
               </div>
             </div>
           </div>
@@ -750,6 +851,7 @@
                   rows="6"
                   placeholder="Describe the assistant’s job, boundaries, and behavior (multiple lines)."
                 ></textarea>
+              
               </div>
             </div>
             <div class="mem-actions mem-bot-actions">
@@ -804,7 +906,7 @@
               </div>
               <div>
                 <label>Call me (English)</label>
-                <input type="text" id="memAddressUserEn" placeholder="e.g. friend, sir, မင်း" />
+                <input type="text" id="memAddressUserEn" placeholder="e.g. friend, sir" />
               </div>
               <div>
                 <label>Call me (Myanmar)</label>
@@ -1040,9 +1142,9 @@
             </div>
           </h1>
           <div class="card">
-            <label>SQLite database path</label>
-            <input type="text" id="databasePath" />
-            <p class="hint">Resolved: <code id="databasePathResolved"></code></p>
+            <label>PostgreSQL connection URL</label>
+            <input type="text" id="databaseUrl" autocomplete="off" spellcheck="false" />
+            <p class="hint">Effective URL (password masked): <code id="databaseUrlResolved"></code></p>
 
             <label>Web browse timeout (ms)</label>
             <input type="number" id="browserTimeoutMs" min="1000" max="60000" step="500" />
@@ -1143,6 +1245,7 @@
         <div id="calendarDayModalBody" class="calendar-modal-body"></div>
       </div>
     </div>
+    <div id="toastHost" class="toast-host" aria-live="polite"></div>
     <script src="/app.js"></script>
   </body>
 </html>

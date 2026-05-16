@@ -1,6 +1,5 @@
 import winston from 'winston';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { getConfig, projectRoot } from './config.js';
 
@@ -11,12 +10,6 @@ const lineFormat = printf(({ level, message, timestamp: ts }) => {
 });
 
 function getLogDir() {
-  if (process.versions?.electron) {
-    if (process.env.PORTABLE_EXECUTABLE_DIR) {
-      return path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'data', 'logs');
-    }
-    return path.join(process.env.APPDATA || os.homedir(), 'SENA', 'data', 'logs');
-  }
   return path.join(projectRoot, 'data', 'logs');
 }
 

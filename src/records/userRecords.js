@@ -1,4 +1,4 @@
-import { getDb } from '../db.js';
+import { query, getPool } from '../db.js';
 import { ensureSoul } from '../memory/soul.js';
 
 function safeJsonParse(s, fallback) {
@@ -105,9 +105,9 @@ export function fingerprintForDbRow(r) {
  * Skip lines that match an existing row fingerprint (re-pasted list / "double check").
  * @returns {{ toInsert: object[], skippedCount: number, totalIncoming: number }}
  */
-export function partitionBulkItemsAgainstExisting(userId, items, defaultOccurredOn) {
+export async function partitionBulkItemsAgainstExisting(userId, items, defaultOccurredOn) {
   const list = Array.isArray(items) ? items : [];
-  const recent = listUserRecords(userId, { limit: 500, record_type: null });
+  const recent = await listUserRecords(userId, { limit: 500, record_type: null });
   const fpSet = new Set();
   for (const r of recent) {
     if (r.record_type === 'medicine') continue;
@@ -132,8 +132,8 @@ export function partitionBulkItemsAgainstExisting(userId, items, defaultOccurred
  * @param {number} userId
  * @param {{ record_type: string, title: string, occurred_on?: string|null, amount?: number|null, currency?: string|null, notes?: string, meta?: object }} row
  */
-export function addUserRecord(userId, row) {
-  ensureSoul(userId);
+export async function addUserRecord(userId, row) {
+  await ensureSoul(userId);
   const record_type = normalizeRecordType(row.record_type);
   const title = String(row.title || '').trim().slice(0, 500);
   if (!title) throw new Error('Title is required');
@@ -149,61 +149,58 @@ export function addUserRecord(userId, row) {
   const notes = String(row.notes ?? '').trim().slice(0, 2000);
   const meta = row.meta && typeof row.meta === 'object' ? row.meta : {};
   const metaStr = JSON.stringify(meta);
-  const db = getDb();
-  const info = db
-    .prepare(
-      `INSERT INTO user_records (user_id, record_type, occurred_on, title, amount, currency, notes, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(userId, record_type, occurred_on, title, amount, currency, notes, metaStr);
-  return getUserRecordById(userId, Number(info.lastInsertRowid));
+  const r = await query(
+    `INSERT INTO user_records (user_id, record_type, occurred_on, title, amount, currency, notes, meta)
+     VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8)
+     RETURNING id`,
+    [userId, record_type, occurred_on, title, amount, currency, notes, metaStr]
+  );
+  return getUserRecordById(userId, Number(r.rows[0].id));
 }
 
-export function getUserRecordById(userId, id) {
-  const db = getDb();
-  return db
-    .prepare(
-      `SELECT id, user_id, record_type, occurred_on, title, amount, currency, notes, meta, created_at
-       FROM user_records WHERE user_id = ? AND id = ?`
-    )
-    .get(userId, id);
+export async function getUserRecordById(userId, id) {
+  const r = await query(
+    `SELECT id, user_id, record_type, occurred_on, title, amount, currency, notes, meta, created_at
+     FROM user_records WHERE user_id = $1 AND id = $2`,
+    [userId, id]
+  );
+  return r.rows[0] ?? null;
 }
 
 /**
  * @param {number} userId
  * @param {{ limit?: number, record_type?: string|null }} [opts]
  */
-export function listUserRecords(userId, opts = {}) {
-  const db = getDb();
+export async function listUserRecords(userId, opts = {}) {
   const limit = Math.min(500, Math.max(1, Number(opts.limit) || 80));
-  const rt = opts.record_type != null && opts.record_type !== '' && opts.record_type !== 'all'
-    ? normalizeRecordType(opts.record_type)
-    : null;
+  const rt =
+    opts.record_type != null && opts.record_type !== '' && opts.record_type !== 'all'
+      ? normalizeRecordType(opts.record_type)
+      : null;
   if (rt) {
-    return db
-      .prepare(
-        `SELECT id, user_id, record_type, occurred_on, title, amount, currency, notes, meta, created_at
-         FROM user_records WHERE user_id = ? AND record_type = ?
-         ORDER BY id DESC LIMIT ?`
-      )
-      .all(userId, rt, limit);
-  }
-  return db
-    .prepare(
+    const r = await query(
       `SELECT id, user_id, record_type, occurred_on, title, amount, currency, notes, meta, created_at
-       FROM user_records WHERE user_id = ?
-       ORDER BY id DESC LIMIT ?`
-    )
-    .all(userId, limit);
+       FROM user_records WHERE user_id = $1 AND record_type = $2
+       ORDER BY id DESC LIMIT $3`,
+      [userId, rt, limit]
+    );
+    return r.rows;
+  }
+  const r = await query(
+    `SELECT id, user_id, record_type, occurred_on, title, amount, currency, notes, meta, created_at
+     FROM user_records WHERE user_id = $1
+     ORDER BY id DESC LIMIT $2`,
+    [userId, limit]
+  );
+  return r.rows;
 }
 
 /** @returns {boolean} */
-export function deleteUserRecordById(userId, id) {
+export async function deleteUserRecordById(userId, id) {
   const n = Number(id);
   if (!Number.isFinite(n) || n < 1) return false;
-  const db = getDb();
-  const r = db.prepare('DELETE FROM user_records WHERE user_id = ? AND id = ?').run(userId, n);
-  return r.changes > 0;
+  const r = await query('DELETE FROM user_records WHERE user_id = $1 AND id = $2', [userId, n]);
+  return Number(r.rowCount || 0) > 0;
 }
 
 function formatOneRecordLine(r) {
@@ -232,8 +229,8 @@ function formatOneRecordLine(r) {
  * @param {{ occurred_on?: string|null, currency?: string|null, items: Array<object> }} payload
  * @returns {{ count: number, firstId: number|null, lastId: number|null }}
  */
-export function bulkAddPurchaseLines(userId, payload) {
-  ensureSoul(userId);
+export async function bulkAddPurchaseLines(userId, payload) {
+  await ensureSoul(userId);
   const items = Array.isArray(payload.items) ? payload.items : [];
   if (items.length < 1) return { count: 0, firstId: null, lastId: null };
   const occurred_on = normalizeOccurredOn(payload.occurred_on) || null;
@@ -241,15 +238,16 @@ export function bulkAddPurchaseLines(userId, payload) {
     payload.currency != null ? String(payload.currency).trim().slice(0, 12) || null : null;
   const max = 100;
   const slice = items.slice(0, max);
-  const db = getDb();
-  const insert = db.prepare(
-    `INSERT INTO user_records (user_id, record_type, occurred_on, title, amount, currency, notes, meta)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  );
-  const work = () => {
-    let firstId = null;
-    let lastId = null;
-    let inserted = 0;
+  const pool = await getPool();
+  const client = await pool.connect();
+  const insertSql = `INSERT INTO user_records (user_id, record_type, occurred_on, title, amount, currency, notes, meta)
+     VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8)
+     RETURNING id`;
+  let firstId = null;
+  let lastId = null;
+  let inserted = 0;
+  try {
+    await client.query('BEGIN');
     for (const raw of slice) {
       const it = raw && typeof raw === 'object' ? raw : {};
       const title = String(it.title || '').trim().slice(0, 500);
@@ -287,7 +285,7 @@ export function bulkAddPurchaseLines(userId, payload) {
           delete meta[k];
         }
       }
-      const info = insert.run(
+      const ins = await client.query(insertSql, [
         userId,
         recordType,
         rowOccurred,
@@ -295,26 +293,30 @@ export function bulkAddPurchaseLines(userId, payload) {
         amount,
         rowCurrency,
         notes,
-        JSON.stringify(meta)
-      );
-      const id = Number(info.lastInsertRowid);
+        JSON.stringify(meta),
+      ]);
+      const id = Number(ins.rows[0]?.id);
       if (Number.isFinite(id) && id > 0) {
         inserted += 1;
         if (firstId == null) firstId = id;
         lastId = id;
       }
     }
-    return { firstId, lastId, inserted };
-  };
-  const { firstId, lastId, inserted } = db.transaction(work)();
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
   return { count: inserted, firstId, lastId };
 }
 
 /**
  * Net qty per product (purchase + sale rows with meta.quantity only). Titles matched case-insensitively.
  */
-export function formatInventoryNetByTitle(userId, limitRows = 500) {
-  const rows = listUserRecords(userId, { limit: limitRows, record_type: null });
+export async function formatInventoryNetByTitle(userId, limitRows = 500) {
+  const rows = await listUserRecords(userId, { limit: limitRows, record_type: null });
   const sums = new Map();
   for (const r of rows) {
     if (r.record_type !== 'purchase' && r.record_type !== 'sale') continue;
@@ -333,14 +335,14 @@ export function formatInventoryNetByTitle(userId, limitRows = 500) {
   return lines.join('\n');
 }
 
-export function formatUserRecordsForPrompt(userId, limit = 45) {
-  const rows = listUserRecords(userId, { limit });
+export async function formatUserRecordsForPrompt(userId, limit = 45) {
+  const rows = await listUserRecords(userId, { limit });
   if (!rows.length) return 'No structured records saved yet. (User can ask to save purchases or medicine rows to the table.)';
   return rows.map(formatOneRecordLine).join('\n');
 }
 
-export function formatUserRecordsReply(userId, opts = {}) {
-  const rows = listUserRecords(userId, { limit: opts.limit ?? 40, record_type: opts.record_type ?? null });
+export async function formatUserRecordsReply(userId, opts = {}) {
+  const rows = await listUserRecords(userId, { limit: opts.limit ?? 40, record_type: opts.record_type ?? null });
   if (!rows.length) return 'No matching saved rows yet.';
   return `Saved rows (newest first):\n${rows.map(formatOneRecordLine).join('\n')}`;
 }

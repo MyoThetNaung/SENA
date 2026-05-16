@@ -1,4 +1,9 @@
 const $ = (id) => document.getElementById(id);
+
+/** Same-origin API calls always send the session cookie (required if API host differs later). */
+function apiFetch(url, opts = {}) {
+  return fetch(url, { ...opts, credentials: opts.credentials ?? 'include' });
+}
 const NEURAL_BG_STORAGE_KEY = 'guiNeuralBackgroundEnabled';
 let neuralBackgroundEnabled = true;
 
@@ -62,11 +67,64 @@ function setStatus(msg, kind) {
   el.className = 'statusbar ' + (kind || '');
 }
 
+function showToast(message, kind = 'info') {
+  const host = $('toastHost');
+  const text = String(message || '').trim();
+  if (!host || !text) return;
+  const el = document.createElement('div');
+  const tone = kind === 'err' || kind === 'error' ? 'error' : kind === 'ok' ? 'ok' : 'info';
+  el.className = `toast toast--${tone}`;
+  el.textContent = text;
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('is-visible'));
+  setTimeout(() => {
+    el.classList.remove('is-visible');
+    setTimeout(() => el.remove(), 320);
+  }, 4500);
+}
+
+function syncEnginePathReadouts() {
+  const g = $('ggufPath')?.value?.trim() || '';
+  const m = $('mmprojPath')?.value?.trim() || '';
+  const dg = $('displayMainModelPath');
+  if (dg) {
+    dg.value = g;
+    dg.title = g || dg.placeholder;
+  }
+  const dm = $('displayMmprojPath');
+  if (dm) {
+    dm.value = m;
+    dm.title = m || dm.placeholder;
+  }
+}
+
+function parseLlamaBindFromForm() {
+  const raw = String($('llamaServerUrl')?.value || 'http://127.0.0.1:8080').trim();
+  try {
+    const u = new URL(raw.replace(/\/$/, ''));
+    const host = u.hostname || '127.0.0.1';
+    const port = Number(u.port || 8080);
+    return { host, port: Number.isFinite(port) && port > 0 ? port : 8080 };
+  } catch {
+    return { host: '127.0.0.1', port: 8080 };
+  }
+}
+
 function logLine(line) {
   const el = $('log');
   const t = new Date().toLocaleTimeString();
   if (!el) return;
   el.textContent = `[${t}] ${line}`;
+}
+
+/** End session and redirect (admin → admin-login, user → /login). */
+async function logoutAndRedirect(redirectTo = '/admin-login') {
+  try {
+    await apiFetch('/api/auth/logout', { method: 'POST' });
+  } catch {
+    /* still redirect */
+  }
+  location.href = redirectTo;
 }
 
 function initWindowControls() {
@@ -75,6 +133,192 @@ function initWindowControls() {
   $('winMinimize')?.addEventListener('click', () => controls.minimize());
   $('winMaximize')?.addEventListener('click', () => controls.toggleMaximize());
   $('winClose')?.addEventListener('click', () => controls.close());
+}
+
+function canResolveNativeFilePath() {
+  return Boolean(window.senaNativeFile?.getLocalPathFromFile);
+}
+
+/**
+ * File picker with optional native path (when available), then browser file input fallback.
+ * @param {Array<() => Promise<string|null|undefined>>} ipcPickers
+ */
+async function pickLocalGgufFilesystemPath(ipcPickers = []) {
+  const list = Array.isArray(ipcPickers) ? ipcPickers : [];
+  for (const fn of list) {
+    if (typeof fn !== 'function') continue;
+    try {
+      const p = String((await fn()) || '').trim();
+      if (p) return { fullPath: p, fileName: basenamePath(p) };
+    } catch {
+      /* try next picker */
+    }
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.gguf,application/octet-stream';
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (!f) {
+        resolve({ fullPath: '', fileName: '' });
+        return;
+      }
+      let p = '';
+      try {
+        if (canResolveNativeFilePath()) {
+          p = String(window.senaNativeFile.getLocalPathFromFile(f) || '').trim();
+        } else if (typeof f.path === 'string' && f.path) {
+          p = f.path.trim();
+        }
+      } catch {
+        p = '';
+      }
+      resolve({
+        fullPath: p,
+        fileName: String(f.name || '').trim(),
+      });
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/** File picker for .mmproj / mmproj .gguf vision projector files. */
+async function pickLocalMmprojFilesystemPath(ipcPickers = []) {
+  const list = Array.isArray(ipcPickers) ? ipcPickers : [];
+  for (const fn of list) {
+    if (typeof fn !== 'function') continue;
+    try {
+      const p = String((await fn()) || '').trim();
+      if (p) return { fullPath: p, fileName: basenamePath(p) };
+    } catch {
+      /* try next picker */
+    }
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.mmproj,.gguf,application/octet-stream';
+    input.addEventListener('change', () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (!f) {
+        resolve({ fullPath: '', fileName: '' });
+        return;
+      }
+      let p = '';
+      try {
+        if (canResolveNativeFilePath()) {
+          p = String(window.senaNativeFile.getLocalPathFromFile(f) || '').trim();
+        } else if (typeof f.path === 'string' && f.path) {
+          p = f.path.trim();
+        }
+      } catch {
+        p = '';
+      }
+      resolve({
+        fullPath: p,
+        fileName: String(f.name || '').trim(),
+      });
+    });
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+function parseGgufModelIdFromPath(filePath) {
+  const name = String(filePath || '')
+    .split(/[\\/]/)
+    .pop();
+  if (!name) return '';
+  return name.replace(/\.gguf$/i, '').trim();
+}
+
+function updateSelectedGgufLabel(modelId) {
+  const el = $('selectedGgufLabel');
+  if (!el) return;
+  const full = $('ggufPath')?.value?.trim() || '';
+  if (full) {
+    el.textContent = full;
+    return;
+  }
+  const id = String(modelId || '').trim();
+  el.textContent = id ? `${id}.gguf` : 'No local model file selected yet.';
+}
+
+function ensureModelOptionSelected(modelId) {
+  const sel = $('llmModel');
+  const id = String(modelId || '').trim();
+  if (!sel || !id) return;
+  let has = false;
+  for (const opt of sel.options) {
+    if (String(opt.value || '').trim() === id) {
+      has = true;
+      break;
+    }
+  }
+  if (!has) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = `${id} (.gguf)`;
+    sel.appendChild(opt);
+  }
+  sel.value = id;
+}
+
+function getModelIdFromGgufLabel() {
+  const label = $('selectedGgufLabel');
+  const raw = String(label?.textContent || '').trim();
+  if (!raw || raw === 'No local model file selected yet.') return '';
+  return raw.replace(/\.gguf$/i, '').trim();
+}
+
+function basenamePath(p) {
+  return String(p || '')
+    .trim()
+    .split(/[/\\]/)
+    .pop();
+}
+
+function joinFolderAndFile(folder, fileName) {
+  const dir = String(folder || '').trim();
+  const name = String(fileName || '').trim();
+  if (!dir || !name) return '';
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return dir.endsWith('/') || dir.endsWith('\\') ? `${dir}${name}` : `${dir}${sep}${name}`;
+}
+
+function normalizeModelsDirInput(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (/\.gguf$/i.test(v)) {
+    return v.replace(/[\\/][^\\/]+$/, '');
+  }
+  return v;
+}
+
+/** Directory containing the selected .gguf (avoids leaving modelsDir on default `models` → app Support folder). */
+function deriveModelsDirFromGgufPath(ggufPath) {
+  const p = String(ggufPath || '').trim();
+  if (!p || !/\.gguf$/i.test(p)) return '';
+  if (!p.includes('/') && !p.includes('\\')) return '';
+  return normalizeModelsDirInput(p);
+}
+
+/** Folder to save as modelsDir: parent of active GGUF when set, otherwise the hidden models field. */
+function effectiveModelsDirForSave() {
+  const fromGguf = deriveModelsDirFromGgufPath($('ggufPath')?.value?.trim() || '');
+  if (fromGguf) return fromGguf;
+  return normalizeModelsDirInput($('modelsDir')?.value?.trim() || '');
+}
+
+function updateSelectedMmprojLabel() {
+  const el = $('selectedMmprojLabel');
+  if (!el) return;
+  const full = $('mmprojPath')?.value?.trim() || '';
+  el.textContent = full || 'None — add an mmproj .gguf for multimodal (images).';
 }
 
 let lastConsoleStatusSignature = '';
@@ -90,9 +334,9 @@ const pendingChatImageByPane = {
 async function refreshConsoleStatusLine() {
   try {
     const [botRes, llmRes, settingsRes] = await Promise.all([
-      fetch('/api/bot/status'),
-      fetch('/api/llm/server-status'),
-      fetch('/api/settings'),
+      apiFetch('/api/bot/status'),
+      apiFetch('/api/llm/server-status'),
+      apiFetch('/api/settings'),
     ]);
     const bot = await botRes.json();
     const llm = await llmRes.json();
@@ -469,13 +713,107 @@ function formatChatTimestampLocal(s) {
   return d ? d.toLocaleString() : '';
 }
 
+function isLlamaRemoteModeFromForm() {
+  const sel = $('llamaServerMode');
+  if (sel) return String(sel.value || 'local').trim() === 'remote';
+  const s = lastSettingsForGui || {};
+  if (s.llamaServerMode === 'remote' || s.llamaServerRemote) return true;
+  if (s.llamaServerExternal === true) return true;
+  return false;
+}
+
+function syncLlamaModelPickersFromHidden() {
+  const main = $('llmModel');
+  const remote = $('llmModelRemote');
+  if (!main || !remote) return;
+  if (isLlamaRemoteModeFromForm()) {
+    remote.value = main.value || remote.value;
+  } else {
+    main.value = remote.value || main.value;
+  }
+}
+
+function syncHiddenModelFromLlamaUi() {
+  const main = $('llmModel');
+  const remote = $('llmModelRemote');
+  if (!main || !remote) return;
+  if (isLlamaRemoteModeFromForm()) {
+    if (remote.value) main.value = remote.value;
+  } else if (main.value) {
+    remote.value = main.value;
+  }
+}
+
+async function populateRemoteModelSelect(selected, opts = {}) {
+  const sel = $('llmModelRemote');
+  const hint = $('llamaRemoteModelsHint');
+  if (!sel) return false;
+  try {
+    const r = await apiFetch('/api/llm/catalog' + catalogQueryForUiBackend());
+    const c = await r.json();
+    if (!r.ok) throw new Error(c.error || c.remoteError || 'Could not list remote models');
+    sel.innerHTML = '';
+    const ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = 'Select model on server';
+    sel.appendChild(ph);
+    const remoteOnly = (c.options || []).filter((o) => o.source === 'remote');
+    const list = remoteOnly.length ? remoteOnly : c.options || [];
+    for (const opt of list) {
+      const id = String(opt.id || '').trim();
+      if (!id) continue;
+      const o = document.createElement('option');
+      o.value = id;
+      o.textContent = opt.label || id;
+      sel.appendChild(o);
+    }
+    const want = String(selected || $('llmModel')?.value || '').trim();
+    if (want && [...sel.options].some((x) => x.value === want)) sel.value = want;
+    else if (want) {
+      const o = document.createElement('option');
+      o.value = want;
+      o.textContent = `${want} (custom)`;
+      sel.appendChild(o);
+      sel.value = want;
+    }
+    if (hint) {
+      hint.textContent = c.remoteOk
+        ? `${list.length} model(s) from ${c.llamaServerUrl || 'server'}.`
+        : c.remoteError || 'Server reachable but model list empty — type a model id in catalog or pick from list after Refresh.';
+    }
+    syncHiddenModelFromLlamaUi();
+    return true;
+  } catch (e) {
+    if (hint) hint.textContent = e.message || String(e);
+    return false;
+  }
+}
+
 function updateProviderVisibility() {
   const p = $('llmProvider').value;
+  const llamaRemote = p === 'llama-server' && isLlamaRemoteModeFromForm();
   $('wrapOllama').classList.toggle('hidden', p !== 'ollama');
   $('wrapLlama').classList.toggle('hidden', p !== 'llama-server');
   $('wrapOpenAi')?.classList.toggle('hidden', p !== 'openai');
   $('wrapOpenRouter')?.classList.toggle('hidden', p !== 'openrouter');
   $('wrapGemini')?.classList.toggle('hidden', p !== 'gemini');
+  $('wrapLlamaLocalModels')?.classList.toggle('hidden', p !== 'llama-server' || llamaRemote);
+  $('wrapLlamaRemoteAuth')?.classList.toggle('hidden', !llamaRemote);
+  $('wrapLlamaRemoteModels')?.classList.toggle('hidden', !llamaRemote);
+  $('localLlmActions')?.classList.toggle('hidden', !isLocalLlmProvider(p));
+  $('btnStartEmbeddedServer')?.classList.toggle('hidden', p !== 'llama-server' || llamaRemote);
+  const hint = $('localLlmTestHint');
+  if (hint) {
+    hint.classList.toggle('hidden', !isLocalLlmProvider(p));
+    if (isLocalLlmProvider(p)) {
+      hint.textContent = llamaRemote
+        ? 'Test the remote llama.cpp URL (and API key if set) before saving.'
+        : 'For local backends, test the current base URL before saving.';
+    }
+  }
+  applyEmbeddedStartDisabledState();
+  refreshEmbeddedServerButtonState().catch(() => {});
+  if (llamaRemote) populateRemoteModelSelect().catch(() => {});
 }
 
 const CHAT_SESSION_STORAGE_KEY = 'guiChatSessionUserId';
@@ -486,6 +824,119 @@ let lastChatMessages = [];
 
 let syncingWebSearchInputs = false;
 let webSearchSaving = false;
+let embeddedServerRunning = false;
+let embeddedStartInFlight = false;
+
+function setEmbeddedServerButtonRunning(running) {
+  embeddedServerRunning = Boolean(running);
+  const btn = $('btnStartEmbeddedServer');
+  if (!btn) return;
+  btn.textContent = embeddedServerRunning ? 'Stop Embedded Server' : 'Start Embedded Server';
+  btn.classList.toggle('danger', embeddedServerRunning);
+  btn.classList.toggle('primary', !embeddedServerRunning);
+  applyEmbeddedStartDisabledState();
+}
+
+function updateEngineEmbeddedStatusFromJson(j) {
+  const badge = $('embeddedServerStatusBadge');
+  const detail = $('embeddedServerStatusDetail');
+  const prov = String($('llmProvider')?.value || '').trim().toLowerCase();
+  if (!badge) return;
+  if (prov !== 'llama-server') {
+    badge.textContent = '—';
+    badge.className = 'embedded-status-badge embedded-status--neutral';
+    if (detail) detail.textContent = '';
+    return;
+  }
+  if (isLlamaRemoteModeFromForm()) {
+    const url = String($('llamaServerUrl')?.value || '').trim();
+    const listening = Boolean(j?.listening);
+    badge.textContent = listening ? 'Remote online' : 'Remote offline';
+    badge.className = listening
+      ? 'embedded-status-badge embedded-status--running'
+      : 'embedded-status-badge embedded-status--offline';
+    if (detail) {
+      detail.textContent = listening
+        ? `Using online server at ${url}`
+        : `Cannot reach ${url}. Test connection or check API key.`;
+    }
+    return;
+  }
+  if (embeddedStartInFlight) {
+    badge.textContent = 'Starting…';
+    badge.className = 'embedded-status-badge embedded-status--starting';
+    if (detail) detail.textContent = 'Launching llama-server with your selected files.';
+    return;
+  }
+  const panel = j.embeddedPanel || {};
+  const running = Boolean(j.embeddedRunning);
+  const listening = Boolean(j.listening);
+  const lastErr = String(panel.lastError || '').trim();
+
+  if (running && listening) {
+    const p = panel.port || String(parseLlamaBindFromForm().port);
+    badge.textContent = `Running on port ${p}`;
+    badge.className = 'embedded-status-badge embedded-status--running';
+    if (detail) detail.textContent = '';
+  } else if (running && !listening) {
+    badge.textContent = 'Starting…';
+    badge.className = 'embedded-status-badge embedded-status--starting';
+    if (detail) detail.textContent = 'Process is running; waiting for the HTTP API to respond.';
+  } else if (lastErr) {
+    badge.textContent = 'Error';
+    badge.className = 'embedded-status-badge embedded-status--error';
+    if (detail) detail.textContent = lastErr.length > 280 ? `${lastErr.slice(0, 280)}…` : lastErr;
+  } else {
+    badge.textContent = 'Offline';
+    badge.className = 'embedded-status-badge embedded-status--offline';
+    if (detail) detail.textContent = '';
+  }
+}
+
+function applyEmbeddedStartDisabledState() {
+  const btn = $('btnStartEmbeddedServer');
+  if (!btn) return;
+  const prov = String($('llmProvider')?.value || '').trim().toLowerCase();
+  if (prov !== 'llama-server' || isLlamaRemoteModeFromForm()) {
+    btn.disabled = false;
+    return;
+  }
+  if (embeddedStartInFlight) {
+    btn.disabled = true;
+    return;
+  }
+  const gguf = $('ggufPath')?.value?.trim() || '';
+  if (embeddedServerRunning) {
+    btn.disabled = false;
+    return;
+  }
+  btn.disabled = !gguf;
+}
+
+async function refreshEmbeddedServerButtonState() {
+  const provider = String($('llmProvider')?.value || '').trim().toLowerCase();
+  if (!isLocalLlmProvider(provider)) {
+    setEmbeddedServerButtonRunning(false);
+    updateEngineEmbeddedStatusFromJson({});
+    return;
+  }
+  if (provider === 'ollama') {
+    setEmbeddedServerButtonRunning(false);
+    updateEngineEmbeddedStatusFromJson({});
+    return;
+  }
+  try {
+    const r = await apiFetch('/api/llm/server-status');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Status failed');
+    setEmbeddedServerButtonRunning(Boolean(j.embeddedRunning));
+    updateEngineEmbeddedStatusFromJson(j);
+  } catch {
+    setEmbeddedServerButtonRunning(false);
+    updateEngineEmbeddedStatusFromJson({});
+  }
+  applyEmbeddedStartDisabledState();
+}
 
 function webSearchToggleInputs() {
   return [$('webSearchEnabled'), $('overviewWebSearch')].filter(Boolean);
@@ -504,7 +955,7 @@ async function persistWebSearchSetting(checked) {
   webSearchSaving = true;
   setStatus('Saving web search…', '');
   try {
-    const r = await fetch('/api/settings', {
+    const r = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ webSearchEnabled: checked }),
@@ -530,7 +981,7 @@ function telegramSavedTokenPlaceholder(maskedFromApi) {
   return `xxxxxxxxxxxx-xxxx-${last4}`;
 }
 
-function renderTelegramTokenList(maskedTokens) {
+function renderTelegramTokenList(maskedTokens, identityByIndex = {}) {
   const el = $('telegramTokenList');
   if (!el) return;
   const list = Array.isArray(maskedTokens) ? maskedTokens.filter(Boolean) : [];
@@ -539,11 +990,31 @@ function renderTelegramTokenList(maskedTokens) {
     return;
   }
   el.innerHTML = list
-    .map(
-      (tok, idx) =>
-        `<span class="telegram-token-chip">Bot ${idx + 1}: ${escapeHtml(String(tok))}</span>`
-    )
+    .map((tok, idx) => {
+      const identity = identityByIndex && typeof identityByIndex === 'object' ? identityByIndex[idx] : null;
+      const botName = identity ? ` (@${String(identity)})` : '';
+      return `<span class="telegram-token-chip"><span class="telegram-token-chip-label">Bot ${
+        idx + 1
+      }${escapeHtml(botName)}: ${escapeHtml(String(tok))}</span><button type="button" class="btn-mini danger telegram-token-remove" data-telegram-token-remove="${idx}" aria-label="Remove Bot ${
+        idx + 1
+      } token">Remove</button></span>`;
+    })
     .join('');
+}
+
+async function fetchTelegramBotIdentityByIndex() {
+  const r = await apiFetch('/api/telegram/bot-identities');
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'Failed to load Telegram bot usernames');
+  const bots = Array.isArray(j.bots) ? j.bots : [];
+  const out = {};
+  for (const b of bots) {
+    const idx = Number(b?.index);
+    if (!Number.isInteger(idx) || idx < 0) continue;
+    const username = String(b?.username || '').trim().replace(/^@+/, '');
+    if (username) out[idx] = username;
+  }
+  return out;
 }
 
 /** Replacing a stored Telegram token requires two separate OK confirmations. */
@@ -575,7 +1046,7 @@ function wireWebSearchToggles() {
 }
 
 async function loadSettingsIntoForm() {
-  const r = await fetch('/api/settings');
+  const r = await apiFetch('/api/settings');
   if (!r.ok) throw new Error('Failed to load settings');
   const s = await r.json();
   lastSettingsForGui = s;
@@ -591,9 +1062,31 @@ async function loadSettingsIntoForm() {
       tokInp.placeholder = '';
     }
   }
-  renderTelegramTokenList(s.telegramBotTokensMasked);
+  let botIdentityByIndex = {};
+  if (Array.isArray(s.telegramBotTokensMasked) && s.telegramBotTokensMasked.length) {
+    try {
+      botIdentityByIndex = await fetchTelegramBotIdentityByIndex();
+    } catch {
+      botIdentityByIndex = {};
+    }
+  }
+  renderTelegramTokenList(s.telegramBotTokensMasked, botIdentityByIndex);
   $('ollamaBaseUrl').value = s.ollamaBaseUrl || 'http://127.0.0.1:11434';
   $('llamaServerUrl').value = s.llamaServerUrl || 'http://127.0.0.1:8080';
+  if ($('llamaServerMode')) {
+    const remoteMode =
+      s.llamaServerMode === 'remote' || Boolean(s.llamaServerRemote) || s.llamaServerExternal === true;
+    $('llamaServerMode').value = remoteMode ? 'remote' : 'local';
+  }
+  if ($('llamaServerApiKey')) $('llamaServerApiKey').value = '';
+  const llamaKeyHint = $('llamaServerApiKeyHint');
+  if (llamaKeyHint) {
+    if (s.hasLlamaServerApiKey && s.llamaServerApiKeyMasked) {
+      llamaKeyHint.textContent = `Key active (ends ${s.llamaServerApiKeyMasked.slice(-4)}) — paste to replace.`;
+    } else {
+      llamaKeyHint.textContent = 'Optional Bearer token for authenticated remote hosts.';
+    }
+  }
   const prov = String(s.llmProvider || '').toLowerCase();
   const allowed = ['ollama', 'llama-server', 'openai', 'openrouter', 'gemini'];
   $('llmProvider').value = allowed.includes(prov) ? prov : 'llama-server';
@@ -634,11 +1127,32 @@ async function loadSettingsIntoForm() {
   $('logLevel').value = s.logLevel || 'info';
   $('browserTimeoutMs').value = s.browserTimeoutMs ?? 10000;
   $('maxBrowsePages').value = s.maxBrowsePages ?? 2;
-  $('databasePath').value = s.databasePath || '';
-  $('databasePathResolved').textContent = s.databasePathResolved || '';
+  const ggufEl = $('ggufPath');
+  if (ggufEl) {
+    const resolvedGguf = String(s.ggufPath || '').trim();
+    const rawGguf = String(s.ggufPathInput || '').trim();
+    ggufEl.value = resolvedGguf || rawGguf;
+  }
+  const mdEl = $('modelsDir');
+  if (mdEl) {
+    const g = ggufEl?.value?.trim() || '';
+    const fromGguf = deriveModelsDirFromGgufPath(g);
+    mdEl.value = fromGguf || (s.modelsDirInput || '');
+  }
+  const mmEl = $('mmprojPath');
+  if (mmEl) {
+    const resolvedMm = String(s.mmprojPath || '').trim();
+    const rawMm = String(s.mmprojPathInput || '').trim();
+    mmEl.value = resolvedMm || rawMm;
+  }
+  $('databaseUrl').value = s.databaseUrl || '';
+  $('databaseUrlResolved').textContent = s.databaseUrlResolved || '';
   $('openBrowserGui').checked = Boolean(s.openBrowserGui);
   setWebSearchInputsChecked(Boolean(s.webSearchEnabled));
   $('settingsPath').textContent = s.settingsPath || '';
+  syncEnginePathReadouts();
+  updateSelectedGgufLabel(s.llmModel);
+  updateSelectedMmprojLabel();
 
   const hint = $('tokenHint');
   if (s.hasSavedToken) {
@@ -650,6 +1164,9 @@ async function loadSettingsIntoForm() {
   }
 
   await refreshModelDropdown(String(s.llmModel || '').trim(), { resetSelection: false });
+  if (isLlamaRemoteModeFromForm()) {
+    await populateRemoteModelSelect(String(s.llmModel || '').trim());
+  }
 
   const onMemory = $('panel-data')?.classList.contains('active');
   if (onMemory && $('memSessionSelect')) {
@@ -663,7 +1180,16 @@ async function loadSettingsIntoForm() {
 function catalogQueryForUiBackend() {
   const p = $('llmProvider')?.value?.trim();
   if (!p) return '';
-  return `?llmProvider=${encodeURIComponent(p)}`;
+  const params = new URLSearchParams({ llmProvider: p });
+  if (p === 'llama-server') {
+    const url = $('llamaServerUrl')?.value?.trim();
+    if (url) params.set('llamaServerUrl', url);
+    const mode = $('llamaServerMode')?.value?.trim();
+    if (mode === 'local' || mode === 'remote') params.set('llamaServerMode', mode);
+    const key = $('llamaServerApiKey')?.value?.trim();
+    if (key) params.set('llamaServerApiKey', key);
+  }
+  return `?${params.toString()}`;
 }
 
 /**
@@ -674,7 +1200,7 @@ function catalogQueryForUiBackend() {
 async function refreshModelDropdown(selected, opts = {}) {
   const resetSelection = Boolean(opts.resetSelection);
   try {
-    const r = await fetch('/api/llm/catalog' + catalogQueryForUiBackend());
+    const r = await apiFetch('/api/llm/catalog' + catalogQueryForUiBackend());
     const c = await r.json();
     if (!r.ok) throw new Error(c.error || 'catalog failed');
 
@@ -776,9 +1302,17 @@ function setStatusLed(el, state) {
   }
 }
 
-function formatLlmBackendLabel(provider) {
+function formatLlmBackendLabel(provider, opts = {}) {
   const p = String(provider || '').toLowerCase();
-  if (p === 'llama-server') return 'llama.cpp server (OpenAI API)';
+  if (p === 'llama-server') {
+    const remote =
+      opts.remote === true ||
+      (opts.remote == null &&
+        (lastSettingsForGui?.llamaServerMode === 'remote' ||
+          lastSettingsForGui?.llamaServerRemote ||
+          lastSettingsForGui?.llamaServerExternal === true));
+    return remote ? 'llama.cpp server (remote)' : 'llama.cpp server (local)';
+  }
   if (p === 'openai') return 'OpenAI (cloud)';
   if (p === 'openrouter') return 'OpenRouter (cloud)';
   if (p === 'gemini') return 'Google Gemini (cloud)';
@@ -839,7 +1373,7 @@ function setCpuTempLine(el, celsius) {
   }
 }
 
-/** nvidia-smi / OS report memory in MiB */
+/** Hardware APIs report memory in MiB */
 function formatGiBFromMib(mib) {
   if (mib == null || !Number.isFinite(mib) || mib < 0) return null;
   const gib = mib / 1024;
@@ -919,7 +1453,9 @@ function setHardwareMeters(hw) {
 
   if (meta) {
     meta.textContent =
-      hw.monitoringSource === 'OpenHardwareMonitor' ? 'Sensors: Open Hardware Monitor' : '';
+      hw.monitoringSource && hw.monitoringSource !== 'built-in'
+        ? `Sensors: ${hw.monitoringSource}`
+        : '';
   }
 }
 
@@ -1069,7 +1605,7 @@ function redrawHardwareCharts() {
 
 async function refreshOverviewHardware() {
   try {
-    const r = await fetch('/api/system/hardware');
+    const r = await apiFetch('/api/system/hardware');
     const hw = await r.json();
     if (!r.ok || hw.error) throw new Error(hw.error || 'hardware');
     setHardwareMeters(hw);
@@ -1166,11 +1702,22 @@ function applyTelegramBotToggleUi(st) {
     }
     const running = Boolean(st.running);
     const starting = Boolean(st.starting);
+    const configured = Number(st.configuredBotCount);
+    const runningCount = Number(st.botCount);
+    const needsRestart = Boolean(st.needsRestart);
     cb.checked = running;
     cb.disabled = starting;
     if (starting) lab?.setAttribute('aria-busy', 'true');
     else lab?.removeAttribute('aria-busy');
-    if (sub) sub.textContent = running ? 'RUNNING' : starting ? 'Starting…' : 'Stopped';
+    if (sub) {
+      if (needsRestart) {
+        sub.textContent = `Restart needed (${runningCount}/${configured} bots)`;
+      } else if (running && Number.isFinite(configured) && configured > 1) {
+        sub.textContent = `RUNNING (${runningCount}/${configured} bots)`;
+      } else {
+        sub.textContent = running ? 'RUNNING' : starting ? 'Starting…' : 'Stopped';
+      }
+    }
     if (circle) {
       circle.classList.remove('hidden');
       circle.classList.toggle('is-running', running);
@@ -1183,7 +1730,7 @@ function applyTelegramBotToggleUi(st) {
 
 async function refreshSidebarBotPowerUi() {
   try {
-    const st = await (await fetch('/api/bot/status')).json();
+    const st = await (await apiFetch('/api/bot/status')).json();
     applyTelegramBotToggleUi(st);
   } catch {
     applyTelegramBotToggleUi(null);
@@ -1198,6 +1745,7 @@ async function loadOverview() {
   const generationTimeEl = $('overviewGenerationTime');
   const generationSpeedEl = $('overviewGenerationSpeed');
   let currentProvider = '';
+  let savedLlmModel = '';
   const clearLocalLlmStats = () => {
     if (generatedTokensEl) generatedTokensEl.textContent = '—';
     if (generationTimeEl) generationTimeEl.textContent = '—';
@@ -1219,7 +1767,7 @@ async function loadOverview() {
   };
 
   try {
-    const settings = await (await fetch('/api/settings')).json();
+    const settings = await (await apiFetch('/api/settings')).json();
     const display = String(settings.botPersona?.displayName || '').trim();
     const nameEl = $('overviewBotName');
     if (nameEl) {
@@ -1228,20 +1776,20 @@ async function loadOverview() {
 
     const backEl = $('overviewLlmBackend');
     currentProvider = String(settings.llmProvider || '').toLowerCase();
-    if (backEl) backEl.textContent = formatLlmBackendLabel(currentProvider);
-    const modelEl = $('overviewActiveModel');
-    if (modelEl) {
-      const m = String(settings.llmModel || '').trim();
-      modelEl.textContent = m || '—';
+    lastSettingsForGui = settings;
+    if (backEl) {
+      backEl.textContent = formatLlmBackendLabel(currentProvider, {
+        remote: settings.llamaServerRemote || settings.llamaServerMode === 'remote',
+      });
     }
+    savedLlmModel = String(settings.llmModel || '').trim();
   } catch {
     currentProvider = '';
+    savedLlmModel = '';
     const nameEl = $('overviewBotName');
     if (nameEl) nameEl.textContent = '—';
     const backEl = $('overviewLlmBackend');
     if (backEl) backEl.textContent = '—';
-    const modelEl = $('overviewActiveModel');
-    if (modelEl) modelEl.textContent = '—';
   }
 
   clearLocalLlmStats();
@@ -1249,7 +1797,7 @@ async function loadOverview() {
   setLocalLlmStatsVisible(showLocalLlmStats);
   if (showLocalLlmStats) {
     try {
-      const statsRes = await fetch(`/api/stats/llm-usage?provider=${encodeURIComponent(currentProvider)}`);
+      const statsRes = await apiFetch(`/api/stats/llm-usage?provider=${encodeURIComponent(currentProvider)}`);
       const stats = await statsRes.json();
       if (statsRes.ok) {
         if (generatedTokensEl) {
@@ -1270,7 +1818,7 @@ async function loadOverview() {
   }
 
   try {
-    const st = await (await fetch('/api/bot/status')).json();
+    const st = await (await apiFetch('/api/bot/status')).json();
     const running = Boolean(st.running);
     const starting = Boolean(st.starting);
     const line = $('overviewTelegramLine');
@@ -1294,88 +1842,95 @@ async function loadOverview() {
     applyTelegramBotToggleUi(null);
   }
 
+  let llmServerOnline = false;
   try {
-    const ss = await (await fetch('/api/llm/server-status')).json();
-    const online = Boolean(ss.online);
+    const ss = await (await apiFetch('/api/llm/server-status')).json();
+    llmServerOnline = Boolean(ss.online);
     const lineEl = $('overviewServerLine');
     const subEl = $('overviewServerDetail');
 
     if (lineEl) {
-      lineEl.textContent = online ? 'Online' : 'Offline';
+      lineEl.textContent = llmServerOnline ? 'Online' : 'Offline';
     }
     if (subEl) {
       subEl.textContent = '';
     }
-    if (online) {
+    if (llmServerOnline) {
       setStatusLed($('overviewServerLed'), 'live');
     } else {
       setStatusLed($('overviewServerLed'), 'idle');
     }
+    setEmbeddedServerButtonRunning(Boolean(ss.embeddedRunning));
+    updateEngineEmbeddedStatusFromJson(ss);
   } catch {
+    llmServerOnline = false;
     const lineEl = $('overviewServerLine');
     const subEl = $('overviewServerDetail');
     if (lineEl) lineEl.textContent = '?';
     if (subEl) subEl.textContent = '';
     setStatusLed($('overviewServerLed'), 'unknown');
+    setEmbeddedServerButtonRunning(false);
+    updateEngineEmbeddedStatusFromJson({});
+  }
+
+  const activeModelCard = $('overviewCardActiveModel');
+  const modelEl = $('overviewActiveModel');
+  const localBackend = isLocalLlmProvider(currentProvider);
+  const showActiveModel = !localBackend || llmServerOnline;
+  if (activeModelCard) activeModelCard.classList.toggle('hidden', !showActiveModel);
+  if (modelEl) {
+    modelEl.textContent = showActiveModel ? savedLlmModel || '—' : '';
   }
 
 }
 
 async function loadAccess() {
-  const r = await fetch('/api/access/users');
+  const r = await apiFetch('/api/admin/allowlist', { credentials: 'include' });
   const d = await r.json();
-  if (!r.ok) throw new Error(d.error || 'access list failed');
+  if (!r.ok) throw new Error(d.error || 'Allowlist failed');
   const users = d.users || [];
 
-  const pend = users.filter((u) => u.status === 'pending');
-  $('accessPendingBody').innerHTML = pend.length
-    ? pend
-        .map((u) => {
-          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
-          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td>${escapeHtml(
-            u.first_name || ''
-          )}</td><td class="msg">${escapeHtml(u.first_message_preview || '')}</td><td>${escapeHtml(
-            u.created_at || ''
-          )}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
-            u.user_id
-          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini success" data-access-act="approved" data-uid="${
-            u.user_id
-          }">Approve</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
-            u.user_id
-          }">Deny</button></td></tr>`;
-        })
+  const invited = users.filter((u) => u.status === 'invited');
+  $('accessPendingBody').innerHTML = invited.length
+    ? invited
+        .map(
+          (u) =>
+            `<tr><td>${escapeHtml(u.email || '—')}</td><td>@${escapeHtml(u.username || '—')}</td><td>${u.telegram_user_id ?? '—'}</td><td>${escapeHtml(
+              u.notes || ''
+            )}</td><td>${escapeHtml(u.invited_at || '')}</td><td class="nowrap"><button type="button" class="btn-mini danger" data-allowlist-disable="${
+              u.id
+            }">Disable</button> <button type="button" class="btn-mini danger" data-allowlist-delete="${
+              u.id
+            }">Remove</button></td></tr>`
+        )
         .join('')
-    : '<tr><td colspan="6" class="hint">No pending users.</td></tr>';
+    : '<tr><td colspan="6" class="hint">No invites yet — add an email or @username above.</td></tr>';
 
-  const appr = users.filter((u) => u.status === 'approved');
-  $('accessApprovedBody').innerHTML = appr.length
-    ? appr
-        .map((u) => {
-          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
-          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td>${escapeHtml(
-            u.last_seen || ''
-          )}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
-            u.user_id
-          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini ghost" data-access-act="pending" data-uid="${
-            u.user_id
-          }">Revoke</button> <button type="button" class="btn-mini danger" data-access-act="blocked" data-uid="${
-            u.user_id
-          }">Block</button></td></tr>`;
-        })
+  const active = users.filter((u) => u.status === 'active');
+  $('accessApprovedBody').innerHTML = active.length
+    ? active
+        .map(
+          (u) =>
+            `<tr><td>${escapeHtml(u.email || '—')}</td><td>@${escapeHtml(u.username || '—')}</td><td>${u.telegram_user_id ?? '—'}</td><td>${
+              u.soul_user_id ?? '—'
+            }</td><td>${escapeHtml(u.last_seen || '')}</td><td class="nowrap"><button type="button" class="btn-mini danger" data-allowlist-disable="${
+              u.id
+            }">Disable</button></td></tr>`
+        )
         .join('')
-    : '<tr><td colspan="4" class="hint">None yet.</td></tr>';
+    : '<tr><td colspan="5" class="hint">No active users yet.</td></tr>';
 
-  const blk = users.filter((u) => u.status === 'blocked');
-  $('accessBlockedBody').innerHTML = blk.length
-    ? blk
-        .map((u) => {
-          const editableName = String(u.display_name || u.username || u.first_name || '').trim();
-          return `<tr><td>${u.user_id}</td><td>${escapeHtml(editableName)}</td><td class="nowrap"><button type="button" class="btn-mini ghost" data-access-name-edit="${
-            u.user_id
-          }" data-access-current-name="${escapeHtml(editableName)}">Edit</button> <button type="button" class="btn-mini success" data-access-act="approved" data-uid="${
-            u.user_id
-          }">Approve</button></td></tr>`;
-        })
+  const disabled = users.filter((u) => u.status === 'disabled');
+  $('accessBlockedBody').innerHTML = disabled.length
+    ? disabled
+        .map(
+          (u) =>
+            `<tr><td>${escapeHtml(u.email || '—')}</td><td>@${escapeHtml(u.username || '—')}</td><td>${u.telegram_user_id ?? '—'}</td><td class="nowrap"><button type="button" class="btn-mini success" data-allowlist-enable="${
+              u.id
+            }">Re-enable</button> <button type="button" class="btn-mini danger" data-allowlist-delete="${
+              u.id
+            }">Remove</button></td></tr>`
+        )
         .join('')
     : '<tr><td colspan="3" class="hint">None.</td></tr>';
 }
@@ -1445,6 +2000,62 @@ function openAccessNameModal(currentName) {
 }
 
 document.addEventListener('click', async (ev) => {
+  const delBtn = ev.target.closest('[data-allowlist-delete]');
+  if (delBtn) {
+    const id = Number(delBtn.getAttribute('data-allowlist-delete'));
+    if (!Number.isFinite(id)) return;
+    if (!window.confirm('Remove this invite from the list?')) return;
+    try {
+      const r = await apiFetch(`/api/admin/allowlist/${id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Delete failed');
+      await loadAccess();
+    } catch (e) {
+      setStatus(e.message, 'err');
+    }
+    return;
+  }
+  const disBtn = ev.target.closest('[data-allowlist-disable]');
+  if (disBtn) {
+    const id = Number(disBtn.getAttribute('data-allowlist-disable'));
+    if (!Number.isFinite(id)) return;
+    try {
+      const r = await apiFetch(`/api/admin/allowlist/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'disabled' }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Update failed');
+      await loadAccess();
+    } catch (e) {
+      setStatus(e.message, 'err');
+    }
+    return;
+  }
+  const enBtn = ev.target.closest('[data-allowlist-enable]');
+  if (enBtn) {
+    const id = Number(enBtn.getAttribute('data-allowlist-enable'));
+    if (!Number.isFinite(id)) return;
+    try {
+      const r = await apiFetch(`/api/admin/allowlist/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'invited' }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Update failed');
+      await loadAccess();
+    } catch (e) {
+      setStatus(e.message, 'err');
+    }
+    return;
+  }
   const nameBtn = ev.target.closest('[data-access-name-edit]');
   if (nameBtn) {
     const uid = Number(nameBtn.getAttribute('data-access-name-edit'));
@@ -1454,7 +2065,7 @@ document.addEventListener('click', async (ev) => {
     if (usernameNext == null) return;
     const username = String(usernameNext).trim();
     try {
-      const r = await fetch('/api/access/set', {
+      const r = await apiFetch('/api/access/set', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: uid, username }),
@@ -1473,31 +2084,6 @@ document.addEventListener('click', async (ev) => {
       logLine('Access name: ' + e.message);
     }
     return;
-  }
-  const btn = ev.target.closest('[data-access-act]');
-  if (!btn) return;
-  const uid = Number(btn.dataset.uid);
-  const status = btn.dataset.accessAct;
-  if (!Number.isFinite(uid) || !status) return;
-  try {
-    const r = await fetch('/api/access/set', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: uid, status }),
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Update failed');
-logLine(`Access ${uid} → ${status}`);
-      await loadAccess();
-      await loadOverview();
-      await loadChat().catch(() => {});
-      await loadCalendar().catch(() => {});
-      await loadMemorySessionsIntoSelects().catch(() => {});
-      await loadSoulForCurrentMemSession().catch(() => {});
-      await loadSouls().catch(() => {});
-  } catch (e) {
-    setStatus(e.message, 'err');
-    logLine('Access: ' + e.message);
   }
 });
 
@@ -1519,6 +2105,7 @@ function formatSoulDetailPaneHtml(soul) {
     ['addressUserMy', 'Address (MY)'],
     ['extra', 'Extra notes'],
     ['memorySummary', 'Memory summary (full)'],
+    ['timezone', 'Timezone'],
   ];
   const dlParts = [];
   for (const [key, label] of profileRows) {
@@ -1595,7 +2182,7 @@ function toggleSoulDetailRow(summaryRow) {
 async function loadSouls() {
   const botId = getSelectedMemoryBotId();
   const q = botId != null ? `?botId=${encodeURIComponent(String(botId))}` : '';
-  const r = await fetch('/api/data/souls' + q);
+  const r = await apiFetch('/api/data/souls' + q);
   const d = await r.json();
   const rows = (d.souls || []).map((u) => {
     const sum = u.preferences?.profile?.memorySummary
@@ -1659,6 +2246,7 @@ function applySoulToMemForm(soul) {
   if ($('memAddressUserMy')) $('memAddressUserMy').value = addrMy;
   $('memExtra').value = prof.extra || '';
   if ($('memMemorySummary')) $('memMemorySummary').value = prof.memorySummary || '';
+  setMemTimezoneValue(prof.timezone || '');
 }
 
 function getGlobalBotPersonaFromCache() {
@@ -1719,32 +2307,99 @@ function getMemoryBotLabel(botId, fallback = null) {
   return custom || fallback || `Bot ${botId}`;
 }
 
-function renderMemoryBotTabs(bots) {
-  const wrap = $('memBotTabs');
-  if (!wrap) return;
-  wrap.innerHTML = '';
+const MEM_TIMEZONE_SELECT_IDS = ['memUserTimezone', 'memBotUserTimezone', 'memSessionTimezone'];
+
+const FALLBACK_TIMEZONES = [
+  'UTC',
+  'Asia/Yangon',
+  'Asia/Bangkok',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Asia/Shanghai',
+  'Asia/Kolkata',
+  'Europe/London',
+  'America/New_York',
+  'America/Los_Angeles',
+  'Australia/Sydney',
+];
+
+function populateMemTimezoneSelects() {
+  const els = MEM_TIMEZONE_SELECT_IDS.map((id) => $(id)).filter(Boolean);
+  if (!els.length) return;
+  let zones = [];
+  if (typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function') {
+    try {
+      zones = Intl.supportedValuesOf('timeZone');
+    } catch {
+      zones = [];
+    }
+  }
+  if (!zones.length) zones = FALLBACK_TIMEZONES;
+  const html =
+    '<option value="">Server default</option>' +
+    zones
+      .slice()
+      .sort()
+      .map((z) => `<option value="${escapeHtml(z)}">${escapeHtml(z)}</option>`)
+      .join('');
+  for (const el of els) el.innerHTML = html;
+}
+
+function getMemTimezoneValue() {
+  for (const id of MEM_TIMEZONE_SELECT_IDS) {
+    const el = $(id);
+    if (el) return String(el.value || '').trim();
+  }
+  return '';
+}
+
+function setMemTimezoneValue(tz) {
+  const v = String(tz || '').trim();
+  for (const id of MEM_TIMEZONE_SELECT_IDS) {
+    const el = $(id);
+    if (el) el.value = v;
+  }
+}
+
+function syncMemTimezoneSelects(fromEl) {
+  const v = fromEl ? String(fromEl.value || '').trim() : getMemTimezoneValue();
+  for (const id of MEM_TIMEZONE_SELECT_IDS) {
+    const el = $(id);
+    if (el && el !== fromEl) el.value = v;
+  }
+}
+
+function renderMemoryBotSelect(bots) {
+  const sel = $('memBotSelect');
+  if (!sel) return;
+  sel.innerHTML = '';
   const list = Array.isArray(bots) ? bots : [];
   if (!list.length) {
-    wrap.innerHTML = '<span class="hint">No Telegram bot data yet.</span>';
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = 'No Telegram bots — add tokens on the Telegram tab';
+    sel.appendChild(o);
     currentMemoryBotId = null;
     return;
   }
-  for (let idx = 0; idx < list.length; idx += 1) {
-    const b = list[idx];
+  let idx = 0;
+  for (const b of list) {
     const botId = Number(b.botId);
     if (!Number.isFinite(botId)) continue;
-    const tab = document.createElement('div');
-    tab.className = 'mem-bot-tab';
-    tab.dataset.botId = String(botId);
-    const on = currentMemoryBotId === botId;
-    tab.classList.toggle('active', on);
-    tab.setAttribute('role', 'button');
-    tab.setAttribute('tabindex', '0');
-    tab.setAttribute('aria-selected', on ? 'true' : 'false');
-    tab.innerHTML = `<span>${escapeHtml(getMemoryBotLabel(botId, `Bot ${idx + 1}`))}</span><button type="button" class="mem-bot-tab-edit" data-mem-bot-edit="${botId}" title="Rename tab">✎</button>`;
-    wrap.appendChild(tab);
+    idx += 1;
+    const o = document.createElement('option');
+    o.value = String(botId);
+    const uname = String(b?.username || '').trim().replace(/^@+/, '');
+    o.textContent = uname
+      ? getMemoryBotLabel(botId, `@${uname}`)
+      : getMemoryBotLabel(botId, `Bot ${idx}`);
+    sel.appendChild(o);
+  }
+  if (currentMemoryBotId != null && [...sel.options].some((x) => x.value === String(currentMemoryBotId))) {
+    sel.value = String(currentMemoryBotId);
   }
 }
+
 
 async function saveMemoryBotTabName(botId, name) {
   const existing =
@@ -1754,7 +2409,7 @@ async function saveMemoryBotTabName(botId, name) {
   const n = String(name || '').trim();
   if (n) existing[String(botId)] = n;
   else delete existing[String(botId)];
-  const r = await fetch('/api/settings', {
+  const r = await apiFetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ memoryBotNamesById: existing }),
@@ -1766,7 +2421,7 @@ async function saveMemoryBotTabName(botId, name) {
 
 async function loadMemoryBotOptions() {
   const prev = Number.isFinite(currentMemoryBotId) ? String(currentMemoryBotId) : '';
-  const r = await fetch('/api/memory/bots');
+  const r = await apiFetch('/api/memory/bots');
   const d = await r.json();
   if (!r.ok) throw new Error(d.error || 'Failed to load Telegram bots');
   const bots = (Array.isArray(d.bots) ? d.bots : []).filter((b) => Number.isFinite(Number(b.botId)));
@@ -1793,7 +2448,7 @@ async function loadMemoryBotOptions() {
 async function loadMemorySessionsIntoSelects() {
   const botId = getSelectedMemoryBotId();
   const q = botId != null ? `?botId=${encodeURIComponent(String(botId))}` : '';
-  const d = await fetch('/api/memory/sessions' + q).then((r) => r.json());
+  const d = await apiFetch('/api/memory/sessions' + q).then((r) => r.json());
   if (d.error) throw new Error(d.error);
   const sessions = d.sessions || [];
   const memSel = $('memSessionSelect');
@@ -1862,7 +2517,7 @@ async function loadSoulForCurrentMemSession() {
     renderRecordsMemTable([]);
     return;
   }
-  const r = await fetch(`/api/soul/${uid}`);
+  const r = await apiFetch(`/api/soul/${uid}`);
   const soul = await r.json();
   if (soul.error) throw new Error(soul.error);
   applySoulToMemForm(soul);
@@ -1914,13 +2569,14 @@ async function loadRecordsMemTable() {
     renderRecordsMemTable([]);
     return;
   }
-  const r = await fetch(`/api/data/records?userId=${encodeURIComponent(uid)}&limit=200`);
+  const r = await apiFetch(`/api/data/records?userId=${encodeURIComponent(uid)}&limit=200`);
   const data = await r.json();
   if (data.error) throw new Error(data.error);
   renderRecordsMemTable(Array.isArray(data.records) ? data.records : []);
 }
 
 async function loadDataTab() {
+  populateMemTimezoneSelects();
   await loadMemoryBotOptions();
   await loadSouls();
   await loadMemorySessionsIntoSelects();
@@ -2084,7 +2740,7 @@ async function loadChat(opts = {}) {
   const overviewActive = Boolean(document.getElementById('panel-overview')?.classList.contains('active'));
   const limit = overviewActive ? OVERVIEW_CHAT_LIMIT : $('chatLimit')?.value || '100';
   if (!overviewActive) syncChatLimitSelects(limit);
-  const sess = await fetch('/api/chat/sessions').then((r) => r.json());
+  const sess = await apiFetch('/api/chat/sessions').then((r) => r.json());
   if (sess.error) throw new Error(sess.error);
   buildSessionSelect(sess);
   const activeUid = overviewActive ? lastGuiConsoleUserId : Number(getActiveChatSelect()?.value);
@@ -2093,7 +2749,7 @@ async function loadChat(opts = {}) {
   localStorage.setItem(CHAT_SESSION_STORAGE_KEY, String(activeUid));
   const q = new URLSearchParams({ limit });
   q.set('userId', String(activeUid));
-  const data = await fetch('/api/chat?' + q.toString()).then((r) => r.json());
+  const data = await apiFetch('/api/chat?' + q.toString()).then((r) => r.json());
   if (data.error) throw new Error(data.error);
   lastChatMessages = Array.isArray(data.messages) ? data.messages : [];
   renderChatThread(lastChatMessages, { forceBottom });
@@ -2122,7 +2778,7 @@ async function sendChatFromGui() {
   appendAndRenderChatMessage('user', userPreview || '[Image]', userId);
   setStatus('Thinking…', '');
   try {
-    const r = await fetch('/api/chat/send', {
+    const r = await apiFetch('/api/chat/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId, text, imageDataUrl: image?.dataUrl || '' }),
@@ -2174,7 +2830,7 @@ async function clearChatDataBySessionWithDoubleConfirmation() {
   if (!ok2) return;
   setStatus('Clearing session chat…', '');
   try {
-    const r = await fetch('/api/chat/clear-session', {
+    const r = await apiFetch('/api/chat/clear-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId: uid }),
@@ -2311,14 +2967,14 @@ function jumpCalendarToToday() {
 }
 
 async function loadCalendar() {
-  const r = await fetch('/api/data/calendar?limit=500');
+  const r = await apiFetch('/api/data/calendar?limit=500');
   const d = await r.json();
   calendarEventsCache = Array.isArray(d.events) ? d.events : [];
   renderCalendarMonth();
 }
 
 async function loadPending() {
-  const r = await fetch('/api/data/pending');
+  const r = await apiFetch('/api/data/pending');
   const d = await r.json();
   const rows = (d.pending || []).map((p) => {
     const payload =
@@ -2337,16 +2993,20 @@ async function loadPending() {
 
 async function saveAll() {
   try {
+    const modelsDirValue = effectiveModelsDirForSave();
+    const llamaRemote = isLlamaRemoteModeFromForm();
     const body = {
       llmProvider: $('llmProvider').value,
       ollamaBaseUrl: $('ollamaBaseUrl').value.trim(),
-      llamaServerUrl: $('llamaServerUrl').value.trim(),
-      llmModel: $('llmModel').value.trim(),
+      ...buildLlamaEnginePatch(),
+      modelsDir: modelsDirValue,
+      ggufPath: llamaRemote ? undefined : $('ggufPath')?.value?.trim() || '',
+      mmprojPath: llamaRemote ? undefined : $('mmprojPath')?.value?.trim() || '',
       guiPort: $('guiPort').value,
       logLevel: $('logLevel').value,
       browserTimeoutMs: $('browserTimeoutMs').value,
       maxBrowsePages: $('maxBrowsePages').value,
-      databasePath: $('databasePath').value.trim(),
+      databaseUrl: $('databaseUrl').value.trim(),
       openBrowserGui: $('openBrowserGui').checked,
       webSearchEnabled: $('webSearchEnabled') ? $('webSearchEnabled').checked : false,
     };
@@ -2368,7 +3028,7 @@ async function saveAll() {
   body.openrouterBaseUrl = $('openrouterBaseUrl')?.value?.trim() || '';
   const gm = $('geminiApiKey')?.value?.trim() || '';
     if (gm) body.geminiApiKey = gm;
-    const r = await fetch('/api/settings', {
+    const r = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -2383,6 +3043,325 @@ async function saveAll() {
     setStatus(e.message, 'err');
     logLine('Save error: ' + e.message);
   }
+}
+
+async function testLocalLlmConnection() {
+  const provider = String($('llmProvider')?.value || '').trim().toLowerCase();
+  if (!isLocalLlmProvider(provider)) {
+    setStatus('Test Connection supports only local backends.', '');
+    return;
+  }
+  const baseUrl =
+    provider === 'ollama'
+      ? String($('ollamaBaseUrl')?.value || '').trim()
+      : String($('llamaServerUrl')?.value || '').trim();
+  if (!baseUrl) {
+    setStatus('Base URL is required.', 'err');
+    return;
+  }
+  const btn = $('btnTestLocalLlm');
+  const hint = $('localLlmTestHint');
+  if (btn) btn.disabled = true;
+  if (hint) hint.textContent = `Testing ${provider} connection…`;
+  try {
+    const testBody = { provider, baseUrl };
+    if (provider === 'llama-server') {
+      const apiKey = $('llamaServerApiKey')?.value?.trim() || '';
+      if (apiKey) testBody.llamaServerApiKey = apiKey;
+    }
+    const r = await apiFetch('/api/llm/test-connection', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(testBody),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Connection test failed');
+    const msg = String(j.message || 'Connection successful.');
+    if (hint) hint.textContent = msg;
+    setStatus(msg, 'ok');
+    if (provider === 'llama-server' && isLlamaRemoteModeFromForm()) {
+      await populateRemoteModelSelect($('llmModelRemote')?.value || $('llmModel')?.value);
+    }
+  } catch (e) {
+    const msg = String(e.message || 'Connection test failed');
+    if (hint) hint.textContent = msg;
+    setStatus(msg, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function buildLlamaEnginePatch() {
+  syncHiddenModelFromLlamaUi();
+  const remote = isLlamaRemoteModeFromForm();
+  const chosenModelId = remote
+    ? String($('llmModelRemote')?.value || $('llmModel')?.value || '').trim()
+    : String($('llmModel')?.value || '').trim() || getModelIdFromGgufLabel();
+  const patch = {
+    llamaServerMode: remote ? 'remote' : 'local',
+  };
+  const urlEl = $('llamaServerUrl');
+  if (urlEl) patch.llamaServerUrl = urlEl.value.trim();
+  if (chosenModelId) patch.llmModel = chosenModelId;
+  const key = $('llamaServerApiKey')?.value?.trim() || '';
+  if (key) patch.llamaServerApiKey = key;
+  return patch;
+}
+
+async function saveEngineSettingsOnly() {
+  const modelsDirValue = effectiveModelsDirForSave();
+  const llamaRemote = isLlamaRemoteModeFromForm();
+  const body = {
+    llmProvider: $('llmProvider').value,
+    ollamaBaseUrl: $('ollamaBaseUrl').value.trim(),
+    modelsDir: modelsDirValue,
+    ...buildLlamaEnginePatch(),
+  };
+  if (!llamaRemote) {
+    body.ggufPath = $('ggufPath')?.value?.trim() || '';
+    body.mmprojPath = $('mmprojPath')?.value?.trim() || '';
+  }
+  const r = await apiFetch('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || 'Save failed');
+  lastSettingsForGui = j.settings || lastSettingsForGui;
+  const s = j.settings || {};
+  if ($('llamaServerMode')) {
+    const remoteMode =
+      s.llamaServerMode === 'remote' || Boolean(s.llamaServerRemote) || s.llamaServerExternal === true;
+    $('llamaServerMode').value = remoteMode ? 'remote' : 'local';
+    updateProviderVisibility();
+  }
+  const ggufEl = $('ggufPath');
+  if (ggufEl) {
+    const resolvedGguf = String(s.ggufPath || '').trim();
+    const rawGguf = String(s.ggufPathInput || '').trim();
+    ggufEl.value = resolvedGguf || rawGguf;
+  }
+  const mmEl = $('mmprojPath');
+  if (mmEl) {
+    const resolvedMm = String(s.mmprojPath || '').trim();
+    const rawMm = String(s.mmprojPathInput || '').trim();
+    mmEl.value = resolvedMm || rawMm;
+  }
+  const mdAfter = $('modelsDir');
+  if (mdAfter) {
+    const g2 = $('ggufPath')?.value?.trim() || '';
+    const dirFromGguf = deriveModelsDirFromGgufPath(g2);
+    if (dirFromGguf) mdAfter.value = dirFromGguf;
+  }
+  syncEnginePathReadouts();
+  updateSelectedGgufLabel($('llmModel')?.value || '');
+  updateSelectedMmprojLabel();
+  return j.settings || {};
+}
+
+async function startEmbeddedLlamaServer() {
+  const provider = String($('llmProvider')?.value || '').trim().toLowerCase();
+  if (!isLocalLlmProvider(provider)) {
+    setStatus('Embedded server is available for local backends.', 'err');
+    return;
+  }
+  const btn = $('btnStartEmbeddedServer');
+  const label = provider === 'ollama' ? 'Ollama' : 'llama.cpp';
+  try {
+    if (embeddedServerRunning) {
+      if (btn) btn.disabled = true;
+      setStatus(`Stopping embedded ${label} server…`, '');
+      const r = await apiFetch('/api/llm/stop-server', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Stop failed');
+      const msg = 'Embedded server stopped.';
+      setStatus(msg, 'ok');
+      logLine(msg);
+      showToast(msg, 'ok');
+      setEmbeddedServerButtonRunning(false);
+      await loadOverview();
+      await refreshEmbeddedServerButtonState();
+      return;
+    }
+    const ggufPathCheck = $('ggufPath')?.value?.trim() || '';
+    if (provider === 'llama-server' && isLlamaRemoteModeFromForm()) {
+      setStatus('Embedded server is not used for remote mode.', 'err');
+      return;
+    }
+    if (provider === 'llama-server' && !ggufPathCheck) {
+      const msg = 'Pick a main .gguf model file before starting the embedded server.';
+      setStatus(msg, 'err');
+      showToast(msg, 'err');
+      return;
+    }
+    embeddedStartInFlight = true;
+    applyEmbeddedStartDisabledState();
+    updateEngineEmbeddedStatusFromJson({ embeddedPanel: {}, embeddedRunning: false, listening: false });
+    if (btn) btn.disabled = true;
+    setStatus(`Starting embedded ${label} server…`, '');
+    try {
+      if (provider === 'llama-server') {
+        await saveEngineSettingsOnly();
+        const bind = parseLlamaBindFromForm();
+        const ggufPath = $('ggufPath')?.value?.trim() || '';
+        const mmprojPath = $('mmprojPath')?.value?.trim() || '';
+        const r = await apiFetch('/api/llm/start-embedded', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ggufPath,
+            mmprojPath,
+            ctxSize: 4096,
+            host: bind.host,
+            port: bind.port,
+          }),
+        });
+        const j = await r.json();
+        if (!r.ok) {
+          const err = String(j.error || 'Start failed');
+          showToast(err, 'err');
+          throw new Error(err);
+        }
+        const msg = `Embedded llama-server listening at ${j.url || ''}.`;
+        setStatus(msg, 'ok');
+        logLine(msg);
+        showToast('Embedded llama-server started.', 'ok');
+        await loadSettingsIntoForm();
+        setEmbeddedServerButtonRunning(true);
+        await loadOverview();
+        return;
+      }
+      await saveEngineSettingsOnly();
+      const r = await apiFetch('/api/llm/start-server', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Start failed');
+      const msg = j.skipped ? 'Server already running.' : `Embedded ${label} server started.`;
+      setStatus(msg, 'ok');
+      logLine(msg);
+      showToast(msg, 'ok');
+      setEmbeddedServerButtonRunning(true);
+      await loadOverview();
+    } finally {
+      embeddedStartInFlight = false;
+      applyEmbeddedStartDisabledState();
+      if (btn) btn.disabled = false;
+      await refreshEmbeddedServerButtonState();
+    }
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Embedded server toggle: ' + e.message);
+    embeddedStartInFlight = false;
+    applyEmbeddedStartDisabledState();
+    if (btn) btn.disabled = false;
+    await refreshEmbeddedServerButtonState();
+  }
+}
+
+async function pickGgufFile() {
+  const modelsDirInput = $('modelsDir');
+  const llmModelInput = $('llmModel');
+  const ggufPathInput = $('ggufPath');
+  if (!modelsDirInput) {
+    setStatus('Models folder input is not available in this view.', 'err');
+    return;
+  }
+  if (!llmModelInput) {
+    setStatus('Model input is not available in this view.', 'err');
+    return;
+  }
+  const ipcPickers = [];
+  if (window.senaDialogs && typeof window.senaDialogs.pickGgufFile === 'function') {
+    ipcPickers.push(() => window.senaDialogs.pickGgufFile());
+  }
+  const picked = await pickLocalGgufFilesystemPath(ipcPickers);
+  const fullPath = String(picked?.fullPath || '').trim();
+  const fallbackFileName = String(picked?.fileName || '').trim();
+  if (!fullPath && !fallbackFileName) {
+    setStatus(
+      'Could not read a filesystem path for the chosen file. Paste the full path into the field below.',
+      'err'
+    );
+    return;
+  }
+
+  if (!fullPath) {
+    const msg = `Could not read the real filesystem path for "${fallbackFileName || 'the chosen file'}". Browsers often hide absolute paths — paste the full path into the field below.`;
+    setStatus(msg, 'err');
+    showToast(msg, 'err');
+    const dg = $('displayMainModelPath');
+    if (dg) dg.focus();
+    return;
+  }
+  const modelId = parseGgufModelIdFromPath(fullPath);
+  const folder = fullPath.replace(/[\\/][^\\/]+$/, '');
+  modelsDirInput.value = folder;
+  if (ggufPathInput) ggufPathInput.value = fullPath;
+  if (modelId) {
+    ensureModelOptionSelected(modelId);
+    llmModelInput.value = modelId;
+  }
+  syncEnginePathReadouts();
+  updateSelectedGgufLabel(modelId);
+  await saveEngineSettingsOnly();
+  setStatus(`Local model selected: ${fullPath}`, 'ok');
+  showToast(`Selected ${basenamePath(fullPath)}`, 'ok');
+}
+
+async function pickMmprojFile() {
+  const mmprojInput = $('mmprojPath');
+  const modelsDirInput = $('modelsDir');
+  if (!mmprojInput) {
+    setStatus('mmproj path field is not available in this view.', 'err');
+    return;
+  }
+  const ipcPickers = [];
+  if (window.senaDialogs) {
+    if (typeof window.senaDialogs.pickMmprojGgufFile === 'function') {
+      ipcPickers.push(() => window.senaDialogs.pickMmprojGgufFile());
+    }
+    if (typeof window.senaDialogs.pickGgufFile === 'function') {
+      ipcPickers.push(() => window.senaDialogs.pickGgufFile());
+    }
+  }
+  const picked = await pickLocalMmprojFilesystemPath(ipcPickers);
+  const fullPath = String(picked?.fullPath || '').trim();
+  const fallbackFileName = String(picked?.fileName || '').trim();
+  if (!fullPath && !fallbackFileName) {
+    setStatus(
+      'Could not read a filesystem path for the chosen projector file. Paste the full path into the field below.',
+      'err'
+    );
+    return;
+  }
+  if (!fullPath) {
+    const msg = `Could not read the real filesystem path for "${fallbackFileName || 'the chosen projector file'}". Browsers often hide absolute paths — paste the full path into the field below.`;
+    setStatus(msg, 'err');
+    showToast(msg, 'err');
+    const dm = $('displayMmprojPath');
+    if (dm) dm.focus();
+    return;
+  }
+  if (modelsDirInput) {
+    const mmprojDir = fullPath.replace(/[\\/][^\\/]+$/, '');
+    if (mmprojDir) modelsDirInput.value = mmprojDir;
+  }
+  mmprojInput.value = fullPath;
+  syncEnginePathReadouts();
+  updateSelectedMmprojLabel();
+  await saveEngineSettingsOnly();
+  setStatus(`Projector selected: ${fullPath}`, 'ok');
+  showToast(`Projector: ${basenamePath(fullPath)}`, 'ok');
+}
+
+async function clearMmprojSelection() {
+  const mmprojInput = $('mmprojPath');
+  if (!mmprojInput) return;
+  mmprojInput.value = '';
+  syncEnginePathReadouts();
+  updateSelectedMmprojLabel();
+  await saveEngineSettingsOnly();
+  setStatus('mmproj cleared.', 'ok');
 }
 
 document.querySelectorAll('.nav-item').forEach((btn) => {
@@ -2403,10 +3382,93 @@ $('llmProvider').addEventListener('change', () => {
   refreshModelDropdown('', { resetSelection: true }).catch(() => {});
 });
 
-$('btnRefreshModels').addEventListener('click', () => {
+$('llamaServerMode')?.addEventListener('change', () => {
+  updateProviderVisibility();
+  if (!isLlamaRemoteModeFromForm()) {
+    refreshModelDropdown($('llmModel')?.value || '', { resetSelection: false }).catch(() => {});
+  }
+});
+
+$('btnRefreshRemoteModels')?.addEventListener('click', () => {
+  populateRemoteModelSelect($('llmModelRemote')?.value || $('llmModel')?.value).catch((e) =>
+    setStatus(e.message, 'err')
+  );
+});
+
+$('llmModelRemote')?.addEventListener('change', () => syncHiddenModelFromLlamaUi());
+
+$('btnRefreshModels')?.addEventListener('click', () => {
   const cur = $('llmModel')?.value?.trim() || '';
   refreshModelDropdown(cur, { resetSelection: false });
 });
+
+$('btnTestLocalLlm')?.addEventListener('click', () => {
+  testLocalLlmConnection().catch((e) => setStatus(e.message, 'err'));
+});
+
+$('btnStartEmbeddedServer')?.addEventListener('click', () => {
+  startEmbeddedLlamaServer().catch((e) => setStatus(e.message, 'err'));
+});
+
+$('btnPickGgufFile')?.addEventListener('click', () => {
+  pickGgufFile().catch((e) => setStatus(e.message, 'err'));
+});
+
+$('btnPickMmprojFile')?.addEventListener('click', () => {
+  pickMmprojFile().catch((e) => setStatus(e.message, 'err'));
+});
+
+$('btnClearMmproj')?.addEventListener('click', () => {
+  clearMmprojSelection().catch((e) => setStatus(e.message, 'err'));
+});
+
+/** Sync manual edits in the visible path field back to the hidden #ggufPath / #mmprojPath. */
+function wirePathReadoutInput(displayId, hiddenId, opts = {}) {
+  const display = $(displayId);
+  const hidden = $(hiddenId);
+  if (!display || !hidden) return;
+  const onCommit = async () => {
+    const v = display.value.trim();
+    hidden.value = v;
+    if (opts.kind === 'gguf') {
+      const modelId = parseGgufModelIdFromPath(v);
+      if (modelId) {
+        ensureModelOptionSelected(modelId);
+        const sel = $('llmModel');
+        if (sel) sel.value = modelId;
+      }
+      const md = $('modelsDir');
+      const dir = deriveModelsDirFromGgufPath(v);
+      if (md && dir) md.value = dir;
+      updateSelectedGgufLabel(modelId);
+    } else {
+      updateSelectedMmprojLabel();
+    }
+    try {
+      await saveEngineSettingsOnly();
+      if (v) showToast(`Path saved: ${basenamePath(v)}`, 'ok');
+    } catch (e) {
+      setStatus(e.message, 'err');
+    }
+  };
+  display.addEventListener('input', () => {
+    hidden.value = display.value.trim();
+    if (opts.kind === 'gguf') updateSelectedGgufLabel(parseGgufModelIdFromPath(display.value.trim()));
+    else updateSelectedMmprojLabel();
+    applyEmbeddedStartDisabledState();
+  });
+  display.addEventListener('change', onCommit);
+  display.addEventListener('blur', onCommit);
+  display.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      display.blur();
+    }
+  });
+}
+
+wirePathReadoutInput('displayMainModelPath', 'ggufPath', { kind: 'gguf' });
+wirePathReadoutInput('displayMmprojPath', 'mmprojPath', { kind: 'mmproj' });
 
 $('btnSave').addEventListener('click', saveAll);
 
@@ -2430,7 +3492,7 @@ async function saveTelegramTokenFromField() {
   if (btn) btn.disabled = true;
   setStatus('Adding bot token…', '');
   try {
-    const r = await fetch('/api/settings', {
+    const r = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ telegramBotTokenAdd: tok }),
@@ -2438,9 +3500,15 @@ async function saveTelegramTokenFromField() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Save failed');
     logLine('Telegram bot token added.');
-    setStatus('Bot token added.', 'ok');
+    const botSt = await apiFetch('/api/bot/status').then((r) => r.json()).catch(() => ({}));
+    const restartHint =
+      botSt?.running && Number(botSt.botCount) !== Number(botSt.configuredBotCount)
+        ? ' Stop the bot (sidebar), then start again to run all bots.'
+        : '';
+    setStatus(`Bot token added.${restartHint}`, restartHint ? 'err' : 'ok');
     await loadSettingsIntoForm();
     await loadOverview();
+    await refreshSidebarBotPowerUi();
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Telegram token save: ' + e.message);
@@ -2459,6 +3527,41 @@ $('telegramBotToken')?.addEventListener('keydown', (ev) => {
   saveTelegramTokenFromField().catch((e) => setStatus(e.message, 'err'));
 });
 
+async function removeTelegramTokenByIndex(idx) {
+  const index = Number(idx);
+  if (!Number.isInteger(index) || index < 0) return;
+  const label = `Bot ${index + 1}`;
+  const sure = window.confirm(
+    `Remove ${label} from Telegram setup?\n\n` +
+      'This only removes that bot token from settings. The full reset button removes everything.'
+  );
+  if (!sure) return;
+  setStatus(`Removing ${label}…`, '');
+  try {
+    const r = await apiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegramBotTokenRemoveIndex: index }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Remove failed');
+    logLine(`${label} token removed.`);
+    setStatus(`${label} removed.`, 'ok');
+    await loadSettingsIntoForm();
+    await loadOverview();
+  } catch (e) {
+    setStatus(e.message, 'err');
+    logLine('Telegram token remove: ' + e.message);
+  }
+}
+
+$('telegramTokenList')?.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-telegram-token-remove]');
+  if (!btn) return;
+  const idx = Number(btn.getAttribute('data-telegram-token-remove'));
+  removeTelegramTokenByIndex(idx).catch((e) => setStatus(e.message, 'err'));
+});
+
 $('btnResetTelegram')?.addEventListener('click', async () => {
   const sure = window.confirm(
     'Reset Telegram setup?\n\n' +
@@ -2468,7 +3571,7 @@ $('btnResetTelegram')?.addEventListener('click', async () => {
   if (!sure) return;
   setStatus('Resetting Telegram…', '');
   try {
-    const r = await fetch('/api/settings/reset-telegram', { method: 'POST' });
+    const r = await apiFetch('/api/settings/reset-telegram', { method: 'POST' });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Reset failed');
     logLine('Telegram setup reset (saved token cleared, access list cleared).');
@@ -2493,13 +3596,13 @@ $('inpBotPower')?.addEventListener('change', async () => {
   setStatus('', '');
   try {
     if (wantRun) {
-      const r = await fetch('/api/bot/start', { method: 'POST' });
+      const r = await apiFetch('/api/bot/start', { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Start failed');
       logLine('Bot started.');
       setStatus('', '');
     } else {
-      const r = await fetch('/api/bot/stop', { method: 'POST' });
+      const r = await apiFetch('/api/bot/stop', { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Stop failed');
       logLine('Bot stopped.');
@@ -2533,10 +3636,10 @@ if ($('btnSaveBotPersona')) {
         style: $('botStyle').value.trim(),
         role: $('botRole').value.trim(),
       };
-      const r = await fetch(`/api/soul/${uid}`, {
+      const r = await apiFetch(`/api/soul/${uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botPersona }),
+        body: JSON.stringify({ botPersona, profile: { timezone: getMemTimezoneValue() } }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Save failed');
@@ -2577,7 +3680,7 @@ if ($('btnSaveBotPersonaGlobal')) {
         llmModel: $('llmModel')?.value?.trim() || '',
         botPersonaByBotId: byBot,
       };
-      const r = await fetch('/api/settings', {
+      const r = await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -2612,7 +3715,7 @@ if ($('btnCopyBotPersona')) {
     }
     setStatus('Copying assistant identity…', '');
     try {
-      const r = await fetch('/api/soul/copy-bot-persona', {
+      const r = await apiFetch('/api/soul/copy-bot-persona', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fromUserId: from, toUserId: to }),
@@ -2640,7 +3743,7 @@ $('panel-data')?.addEventListener('click', (ev) => {
     (async () => {
       setStatus('Deleting row…', '');
       try {
-        const r = await fetch('/api/data/records/delete', {
+        const r = await apiFetch('/api/data/records/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: uid, id }),
@@ -2655,34 +3758,6 @@ $('panel-data')?.addEventListener('click', (ev) => {
     })();
     return;
   }
-  const editBtn = ev.target.closest('[data-mem-bot-edit]');
-  if (editBtn) {
-    ev.preventDefault();
-    ev.stopPropagation();
-    const botId = Number(editBtn.getAttribute('data-mem-bot-edit'));
-    if (!Number.isFinite(botId)) return;
-    const current = getMemoryBotLabel(botId);
-    const next = window.prompt(`Rename tab for Bot ${botId}:`, current);
-    if (next == null) return;
-    saveMemoryBotTabName(botId, next)
-      .then(() => loadDataTab())
-      .catch((e) => setStatus(e.message, 'err'));
-    return;
-  }
-  const botTab = ev.target.closest('.mem-bot-tab');
-  if (botTab && botTab.dataset.botId) {
-    ev.preventDefault();
-    const next = Number(botTab.dataset.botId);
-    if (!Number.isFinite(next) || currentMemoryBotId === next) return;
-    currentMemoryBotId = next;
-    try {
-      localStorage.setItem(MEMORY_BOT_KEY, String(next));
-    } catch {
-      /* ignore */
-    }
-    loadDataTab().catch((e) => setStatus(e.message, 'err'));
-    return;
-  }
   const soulRow = ev.target.closest('.soul-summary-row');
   if (soulRow) {
     toggleSoulDetailRow(soulRow);
@@ -2694,12 +3769,12 @@ $('panel-data')?.addEventListener('click', (ev) => {
   setMemorySubtab(tab.dataset.memSub);
 });
 
-$('panel-data')?.addEventListener('keydown', (ev) => {
-  const botTab = ev.target.closest('.mem-bot-tab');
-  if (botTab && (ev.key === 'Enter' || ev.key === ' ')) {
-    ev.preventDefault();
-    const next = Number(botTab.dataset.botId);
-    if (!Number.isFinite(next) || currentMemoryBotId === next) return;
+
+
+if ($('memBotSelect')) {
+  $('memBotSelect').addEventListener('change', () => {
+    const next = Number($('memBotSelect').value);
+    if (!Number.isFinite(next)) return;
     currentMemoryBotId = next;
     try {
       localStorage.setItem(MEMORY_BOT_KEY, String(next));
@@ -2707,15 +3782,27 @@ $('panel-data')?.addEventListener('keydown', (ev) => {
       /* ignore */
     }
     loadDataTab().catch((e) => setStatus(e.message, 'err'));
-    return;
-  }
-  if (ev.key !== 'Enter' && ev.key !== ' ') return;
-  const soulRow = ev.target.closest('.soul-summary-row');
-  if (!soulRow) return;
-  ev.preventDefault();
-  toggleSoulDetailRow(soulRow);
-});
-
+  });
+}
+if ($('btnRenameMemBot')) {
+  $('btnRenameMemBot').addEventListener('click', () => {
+    const botId = getSelectedMemoryBotId();
+    if (!Number.isFinite(botId)) {
+      setStatus('Pick a bot first.', 'err');
+      return;
+    }
+    const current = getMemoryBotLabel(botId);
+    const next = window.prompt(`Rename label for Bot ${botId}:`, current);
+    if (next == null) return;
+    saveMemoryBotTabName(botId, next)
+      .then(() => loadDataTab())
+      .catch((e) => setStatus(e.message, 'err'));
+  });
+}
+for (const tzId of MEM_TIMEZONE_SELECT_IDS) {
+  const el = $(tzId);
+  if (el) el.addEventListener('change', () => syncMemTimezoneSelects(el));
+}
 if ($('memSessionSelect')) {
   $('memSessionSelect').addEventListener('change', () => {
     try {
@@ -2751,9 +3838,10 @@ if ($('btnSaveMemSession')) {
           memorySummary: $('memMemorySummary') ? $('memMemorySummary').value.trim() : '',
           addressUserEn: $('memAddressUserEn') ? $('memAddressUserEn').value.trim() : '',
           addressUserMy: $('memAddressUserMy') ? $('memAddressUserMy').value.trim() : '',
+          timezone: getMemTimezoneValue(),
         },
       };
-      const r = await fetch(`/api/soul/${uid}`, {
+      const r = await apiFetch(`/api/soul/${uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -2787,7 +3875,7 @@ if ($('btnClearMemSession')) {
     }
     setStatus('Clearing…', '');
     try {
-      const r = await fetch(`/api/soul/${uid}/clear`, { method: 'POST' });
+      const r = await apiFetch(`/api/soul/${uid}/clear`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Clear failed');
       logLine(`Cleared soul for user ${uid}.`);
@@ -2809,7 +3897,7 @@ if ($('btnClearAllMemory')) {
     }
     setStatus('Clearing all memory…', '');
     try {
-      const r = await fetch('/api/memory/clear-all', {
+      const r = await apiFetch('/api/memory/clear-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ confirm: 'DELETE ALL' }),
@@ -2842,7 +3930,7 @@ if ($('btnCopyMemSession')) {
     if (!confirm(`Copy memory from ${from} into ${to}? Existing data for ${to} will be replaced.`)) return;
     setStatus('Copying…', '');
     try {
-      const r = await fetch('/api/soul/copy', {
+      const r = await apiFetch('/api/soul/copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fromUserId: from, toUserId: to }),
@@ -2890,7 +3978,7 @@ $('panel-calendar')?.addEventListener('click', async (ev) => {
   if (!window.confirm('Delete this calendar event?')) return;
   setStatus('Deleting…', '');
   try {
-    const r = await fetch('/api/data/calendar/delete', {
+    const r = await apiFetch('/api/data/calendar/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id }),
@@ -2928,7 +4016,7 @@ $('panel-pending')?.addEventListener('click', async (ev) => {
   if (!window.confirm(`Remove pending confirmation for user ${userId}?`)) return;
   setStatus('Deleting…', '');
   try {
-    const r = await fetch('/api/data/pending/delete', {
+    const r = await apiFetch('/api/data/pending/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userId }),
@@ -2943,19 +4031,52 @@ $('panel-pending')?.addEventListener('click', async (ev) => {
     logLine('Pending delete: ' + e.message);
   }
 });
+$('btnInviteUser')?.addEventListener('click', async () => {
+  const email = String($('inviteEmail')?.value || '').trim();
+  const username = String($('inviteUsername')?.value || '').trim();
+  const telegramUserId = String($('inviteTelegramId')?.value || '').trim();
+  const notes = String($('inviteNotes')?.value || '').trim();
+  if (!email && !username && !telegramUserId) {
+    setStatus('Enter a Google email, @username, or Telegram user id.', 'err');
+    return;
+  }
+  setStatus('Adding invite…', '');
+  try {
+    const r = await apiFetch('/api/admin/allowlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        email: email || undefined,
+        username: username || undefined,
+        telegramUserId: telegramUserId || undefined,
+        notes,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'Invite failed');
+    if ($('inviteEmail')) $('inviteEmail').value = '';
+    if ($('inviteUsername')) $('inviteUsername').value = '';
+    if ($('inviteTelegramId')) $('inviteTelegramId').value = '';
+    if ($('inviteNotes')) $('inviteNotes').value = '';
+    setStatus('Invite added.', '');
+    await loadAccess();
+  } catch (e) {
+    setStatus(e.message, 'err');
+  }
+});
+
 $('btnRefreshAccess').addEventListener('click', () => loadAccess().catch((e) => setStatus(e.message, 'err')));
 $('btnClearAccessAll')?.addEventListener('click', async () => {
   const ok1 = window.confirm(
-    'Clear all access data?\n\nThis removes all pending, approved, and blocked Telegram access records. New messages will create fresh pending requests.'
+    'Clear all invites?\n\nNo Telegram user will be able to sign in or message the bot until invited again.'
   );
   if (!ok1) return;
-  const ok2 = window.confirm(
-    'Second confirmation: clear ALL access records now?\n\nThis cannot be undone.'
-  );
+  const ok2 = window.confirm('Second confirmation: clear ALL invites now?');
   if (!ok2) return;
-  setStatus('Clearing access data…', '');
+  setStatus('Clearing invites…', '');
   try {
-    const r = await fetch('/api/access/clear-all', { method: 'POST' });
+    const r = await apiFetch('/api/admin/allowlist/clear-all', { method: 'POST', credentials: 'include' });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Clear access data failed');
     logLine('All Telegram access records cleared.');
@@ -3055,11 +4176,17 @@ window.addEventListener('hashchange', routeHash);
 
 (async function init() {
   try {
+    const auth = await apiFetch('/api/auth/me', { credentials: 'include' }).then((res) => res.json());
+    if (!auth.authenticated || auth.role !== 'admin') {
+      location.href = '/admin-login';
+      return;
+    }
     initNeuralBackgroundToggle();
     initScrollbarArrowGlow();
     initWindowControls();
     initNeuralBackground();
     initCustomCursor();
+    $('btnAdminLogout')?.addEventListener('click', () => logoutAndRedirect('/admin-login'));
     logLine('Console active. Non-routine updates and errors will appear here.');
     await loadSettingsIntoForm();
     await refreshSidebarBotPowerUi();

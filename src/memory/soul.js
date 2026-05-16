@@ -1,6 +1,7 @@
-import { getDb } from '../db.js';
-import { logger } from '../logger.js';
+import { query } from '../db.js';
 import { SCOPED_USER_ID_OFFSET } from '../access/telegramAccess.js';
+import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
+import { normalizeTimezone } from '../util/timezone.js';
 
 function safeJsonParse(s, fallback) {
   try {
@@ -10,9 +11,9 @@ function safeJsonParse(s, fallback) {
   }
 }
 
-export function getSoul(userId) {
-  const db = getDb();
-  const row = db.prepare('SELECT * FROM soul WHERE user_id = ?').get(userId);
+export async function getSoul(userId) {
+  const r = await query('SELECT * FROM soul WHERE user_id = $1', [userId]);
+  const row = r.rows[0];
   if (!row) {
     return {
       user_id: userId,
@@ -29,24 +30,22 @@ export function getSoul(userId) {
   };
 }
 
-export function listSouls(filter = {}) {
+export async function listSouls(filter = {}) {
   const botId = filter?.botId != null && filter.botId !== '' ? Number(filter.botId) : null;
-  const db = getDb();
-  let rows = [];
+  let rows;
   if (Number.isFinite(botId)) {
-    rows = db
-      .prepare(
-        `SELECT s.user_id, s.display_name, s.preferences, s.facts, s.updated_at
-         FROM soul s
-         JOIN telegram_identity_map m ON m.id = (s.user_id - ?)
-         WHERE m.bot_id = ?
-         ORDER BY s.user_id`
-      )
-      .all(SCOPED_USER_ID_OFFSET, botId);
+    const r = await query(
+      `SELECT s.user_id, s.display_name, s.preferences, s.facts, s.updated_at
+       FROM soul s
+       JOIN telegram_identity_map m ON m.id = (s.user_id - $1)
+       WHERE m.bot_id = $2
+       ORDER BY s.user_id`,
+      [SCOPED_USER_ID_OFFSET, botId]
+    );
+    rows = r.rows;
   } else {
-    rows = db
-      .prepare(`SELECT user_id, display_name, preferences, facts, updated_at FROM soul ORDER BY user_id`)
-      .all();
+    const r = await query(`SELECT user_id, display_name, preferences, facts, updated_at FROM soul ORDER BY user_id`);
+    rows = r.rows;
   }
   return rows.map((row) => ({
     user_id: row.user_id,
@@ -57,25 +56,25 @@ export function listSouls(filter = {}) {
   }));
 }
 
-export function ensureSoul(userId) {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO soul (user_id) VALUES (?)
-     ON CONFLICT(user_id) DO NOTHING`
-  ).run(userId);
+export async function ensureSoul(userId) {
+  await query(
+    `INSERT INTO soul (user_id) VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
 }
 
-export function updateSoul(userId, patch) {
-  ensureSoul(userId);
-  const db = getDb();
-  const current = getSoul(userId);
+export async function updateSoul(userId, patch) {
+  await ensureSoul(userId);
+  const current = await getSoul(userId);
   const display_name = patch.display_name !== undefined ? patch.display_name : current.display_name;
   const preferences =
     patch.preferences !== undefined ? { ...current.preferences, ...patch.preferences } : current.preferences;
   const facts = patch.facts !== undefined ? patch.facts : current.facts;
-  db.prepare(
-    `UPDATE soul SET display_name = ?, preferences = ?, facts = ?, updated_at = datetime('now') WHERE user_id = ?`
-  ).run(display_name, JSON.stringify(preferences), JSON.stringify(facts), userId);
+  await query(
+    `UPDATE soul SET display_name = $1, preferences = $2, facts = $3, updated_at = timezone('utc', now()) WHERE user_id = $4`,
+    [display_name, JSON.stringify(preferences), JSON.stringify(facts), userId]
+  );
 }
 
 export function normalizeSoulBotPersona(raw) {
@@ -100,6 +99,7 @@ export function formatSoulForPrompt(soul) {
   if (prof.work) parts.push(`Work / occupation: ${prof.work}`);
   if (prof.gender) parts.push(`Gender: ${prof.gender}`);
   if (prof.age) parts.push(`Age: ${prof.age}`);
+  if (prof.timezone) parts.push(`Timezone (for dates/times): ${prof.timezone}`);
   if (prof.extra) parts.push(`Other notes: ${prof.extra}`);
   if (prof.memorySummary) {
     parts.push(`Conversation memory (summary of what you discussed):\n${prof.memorySummary}`);
@@ -114,9 +114,9 @@ export function formatSoulForPrompt(soul) {
 }
 
 /** LLM summary refresh — does not touch GUI-only fields except memorySummary */
-export function mergeProfileMemorySummary(userId, summaryText) {
-  ensureSoul(userId);
-  const current = getSoul(userId);
+export async function mergeProfileMemorySummary(userId, summaryText) {
+  await ensureSoul(userId);
+  const current = await getSoul(userId);
   const prof = {
     ...(current.preferences?.profile && typeof current.preferences.profile === 'object'
       ? current.preferences.profile
@@ -124,18 +124,16 @@ export function mergeProfileMemorySummary(userId, summaryText) {
     memorySummary: String(summaryText || '').trim().slice(0, 4000),
   };
   const preferences = { ...current.preferences, profile: prof };
-  const db = getDb();
-  db.prepare(`UPDATE soul SET preferences = ?, updated_at = datetime('now') WHERE user_id = ?`).run(
+  await query(`UPDATE soul SET preferences = $1, updated_at = timezone('utc', now()) WHERE user_id = $2`, [
     JSON.stringify(preferences),
-    userId
-  );
+    userId,
+  ]);
 }
 
 /** Replace display name, profile, and/or per-session assistant (bot) persona. Legacy facts column cleared on save. */
-export function setSoulContent(userId, { display_name, profile, botPersona }) {
-  ensureSoul(userId);
-  const db = getDb();
-  const current = getSoul(userId);
+export async function setSoulContent(userId, { display_name, profile, botPersona }) {
+  await ensureSoul(userId);
+  const current = await getSoul(userId);
   const prevProf =
     current.preferences?.profile && typeof current.preferences.profile === 'object'
       ? current.preferences.profile
@@ -151,6 +149,10 @@ export function setSoulContent(userId, { display_name, profile, botPersona }) {
           memorySummary: String(profile.memorySummary ?? prevProf.memorySummary ?? '').trim(),
           addressUserEn: String(profile.addressUserEn ?? prevProf.addressUserEn ?? '').trim(),
           addressUserMy: String(profile.addressUserMy ?? prevProf.addressUserMy ?? '').trim(),
+          timezone:
+            profile.timezone !== undefined
+              ? normalizeTimezone(profile.timezone) || ''
+              : normalizeTimezone(prevProf.timezone) || '',
         }
       : { ...prevProf };
   const preferences = { ...current.preferences, profile: nextProfile };
@@ -161,39 +163,50 @@ export function setSoulContent(userId, { display_name, profile, botPersona }) {
     else delete preferences.botPersona;
   }
   const name = display_name !== undefined ? String(display_name || '').trim() || null : current.display_name;
-  db.prepare(
-    `UPDATE soul SET display_name = ?, preferences = ?, facts = ?, updated_at = datetime('now') WHERE user_id = ?`
-  ).run(name, JSON.stringify(preferences), JSON.stringify([]), userId);
+  await query(
+    `UPDATE soul SET display_name = $1, preferences = $2, facts = $3, updated_at = timezone('utc', now()) WHERE user_id = $4`,
+    [name, JSON.stringify(preferences), JSON.stringify([]), userId]
+  );
 }
 
-export function clearSoul(userId) {
-  const db = getDb();
-  db.prepare('DELETE FROM soul WHERE user_id = ?').run(userId);
+export async function clearSoul(userId) {
+  await query('DELETE FROM soul WHERE user_id = $1', [userId]);
 }
 
-export function copySoulFromTo(fromUserId, toUserId) {
-  const src = getSoul(fromUserId);
-  ensureSoul(toUserId);
-  const db = getDb();
-  db.prepare(
-    `UPDATE soul SET display_name = ?, preferences = ?, facts = ?, updated_at = datetime('now') WHERE user_id = ?`
-  ).run(src.display_name, JSON.stringify(src.preferences), JSON.stringify(src.facts), toUserId);
+export async function copySoulFromTo(fromUserId, toUserId) {
+  const src = await getSoul(fromUserId);
+  await ensureSoul(toUserId);
+  await query(
+    `UPDATE soul SET display_name = $1, preferences = $2, facts = $3, updated_at = timezone('utc', now()) WHERE user_id = $4`,
+    [src.display_name, JSON.stringify(src.preferences), JSON.stringify(src.facts), toUserId]
+  );
 }
 
 /** Copy only `preferences.botPersona` from one soul to another (rest of destination soul unchanged). */
-export function copyBotPersonaFromTo(fromUserId, toUserId) {
-  ensureSoul(fromUserId);
-  ensureSoul(toUserId);
-  const src = getSoul(fromUserId);
-  const dest = getSoul(toUserId);
+/** Calendar context for a user (profile.timezone or server default). */
+export async function getClockContextForUser(userId) {
+  const soul = await getSoul(userId);
+  const tz = soul.preferences?.profile?.timezone;
+  return getCalendarClockContext({ timezone: tz });
+}
+
+export function getTimezoneFromSoul(soul) {
+  return normalizeTimezone(soul?.preferences?.profile?.timezone) || '';
+}
+
+export async function copyBotPersonaFromTo(fromUserId, toUserId) {
+  await ensureSoul(fromUserId);
+  await ensureSoul(toUserId);
+  const src = await getSoul(fromUserId);
+  const dest = await getSoul(toUserId);
   const raw = src.preferences?.botPersona;
   const preferences = { ...dest.preferences };
   const norm = normalizeSoulBotPersona(raw);
   const any = Object.values(norm).some((v) => v !== '');
   if (any) preferences.botPersona = norm;
   else delete preferences.botPersona;
-  const db = getDb();
-  db.prepare(
-    `UPDATE soul SET preferences = ?, updated_at = datetime('now') WHERE user_id = ?`
-  ).run(JSON.stringify(preferences), toUserId);
+  await query(`UPDATE soul SET preferences = $1, updated_at = timezone('utc', now()) WHERE user_id = $2`, [
+    JSON.stringify(preferences),
+    toUserId,
+  ]);
 }

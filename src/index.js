@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { createBot } from './bot/telegram.js';
 import { assertBotConfigReady, getConfig } from './config.js';
-import { getDb } from './db.js';
+import { getPool } from './db.js';
 import {
   startLlamaServerIfConfigured,
   stopLlamaServerIfWeStarted,
@@ -34,7 +34,7 @@ try {
 } catch (e) {
   logger.warn(`Folder init: ${e.message}`);
 }
-getDb();
+await getPool();
 
 try {
   const llama = await startLlamaServerIfConfigured(false);

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SENA — Admin sign in</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <style>
+      .auth-wrap {
+        max-width: 420px;
+        margin: 4rem auto;
+        padding: 2rem;
+      }
+      .auth-wrap form {
+        display: flex;
+        flex-direction: column;
+      }
+      .auth-wrap form label {
+        display: block;
+        font-family: 'Open Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        color: #cbd5e1;
+        margin: 1.25rem 0 0.5rem;
+      }
+      .auth-wrap form label:first-of-type {
+        margin-top: 0;
+      }
+      .auth-wrap form input[type='email'],
+      .auth-wrap form input[type='password'],
+      .auth-wrap form input[type='text'] {
+        appearance: none;
+        -webkit-appearance: none;
+        box-sizing: border-box;
+        width: 100%;
+        margin: 0;
+        padding: 12px;
+        font-family: inherit;
+        font-size: 0.9375rem;
+        line-height: 1.5;
+        color: #f1f5f9;
+        background-color: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+      }
+      .auth-wrap form input::placeholder {
+        color: #64748b;
+        opacity: 1;
+      }
+      .auth-wrap form input:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.28);
+        background-color: #0f172a;
+      }
+      .auth-wrap form input:-webkit-autofill,
+      .auth-wrap form input:-webkit-autofill:hover,
+      .auth-wrap form input:-webkit-autofill:focus {
+        -webkit-text-fill-color: #f1f5f9;
+        -webkit-box-shadow: 0 0 0 1000px #0f172a inset;
+        box-shadow: 0 0 0 1000px #0f172a inset;
+        caret-color: #f1f5f9;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+      }
+      .auth-error {
+        color: #f87171;
+        margin-top: 1rem;
+        min-height: 1.25rem;
+      }
+      .auth-links {
+        margin-top: 1.5rem;
+        font-size: 0.9rem;
+      }
+      .auth-links a {
+        color: #60a5fa;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="auth-wrap card">
+      <h1>Admin</h1>
+      <p style="color: #94a3b8; line-height: 1.5; margin-bottom: 1rem">
+        Control panel access uses your email account. Add Telegram @usernames before users can sign in.
+      </p>
+      <form id="adminLoginForm">
+        <label for="email">Email</label>
+        <input class="input" type="email" id="email" required autocomplete="username" placeholder="you@example.com" />
+        <label for="password">Password</label>
+        <input class="input" type="password" id="password" required autocomplete="current-password" placeholder="Enter your password" />
+        <button type="submit" class="primary wide" style="margin-top: 1.25rem">Sign in</button>
+      </form>
+      <p class="auth-error" id="loginError"></p>
+      <p class="auth-links"><a href="/login.html">User sign in (Telegram)</a></p>
+    </div>
+    <script>
+      (async function () {
+        const me = await fetch('/api/auth/me', { credentials: 'include' }).then((r) => r.json());
+        if (me.authenticated && me.role === 'admin') {
+          location.href = '/';
+          return;
+        }
+        document.getElementById('adminLoginForm').addEventListener('submit', async (ev) => {
+          ev.preventDefault();
+          const errEl = document.getElementById('loginError');
+          errEl.textContent = '';
+          try {
+            const r = await fetch('/api/auth/admin/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                email: document.getElementById('email').value.trim(),
+                password: document.getElementById('password').value,
+              }),
+            });
+            const j = await r.json();
+            if (!r.ok) throw new Error(j.error || 'Login failed');
+            location.href = '/';
+          } catch (e) {
+            errEl.textContent = e.message || String(e);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

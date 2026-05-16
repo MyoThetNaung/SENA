@@ -1,8 +1,9 @@
 import fs from 'fs';
 import net from 'net';
 import path from 'path';
-import { getConfig } from '../config.js';
+import { getConfig, isLlamaServerRemote } from '../config.js';
 import { explainFetchError } from './fetchUtil.js';
+import { fetchLlamaServer } from './llamaServerClient.js';
 import { logger } from '../logger.js';
 import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from './cloudLlm.js';
 
@@ -73,7 +74,7 @@ function probeLlamaTcpPort(baseUrl, timeoutMs = 2000) {
  * Any HTTP response (including 401/404) means the server process is answering; builds differ on paths.
  * If every GET fails at the network layer, we fall back to a TCP open on the configured port.
  */
-export async function probeLlamaServerReachable(baseUrl, timeoutMs = 3000) {
+export async function probeLlamaServerReachable(baseUrl, timeoutMs = 3000, authOverrides = {}) {
   const base = String(baseUrl || '').replace(/\/$/, '');
   if (!base) return false;
 
@@ -89,7 +90,12 @@ export async function probeLlamaServerReachable(baseUrl, timeoutMs = 3000) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const res = await fetch(endpoint, { signal: ctrl.signal, method: 'GET' });
+      const res = await fetchLlamaServer(
+        endpoint,
+        { signal: ctrl.signal, method: 'GET' },
+        getConfig(),
+        authOverrides
+      );
       if (res.body) {
         await res.body.cancel().catch(() => {});
       }
@@ -109,7 +115,7 @@ export async function probeLlamaServerReachable(baseUrl, timeoutMs = 3000) {
 }
 
 /** llama.cpp server: try OpenAI-style /v1/models, then /models */
-export async function fetchLlamaServerModelNames(baseUrl) {
+export async function fetchLlamaServerModelNames(baseUrl, authOverrides = {}) {
   const base = String(baseUrl || '').replace(/\/$/, '');
   if (!base) return { ok: false, models: [], error: 'No base URL' };
   const ctrl = new AbortController();
@@ -120,7 +126,7 @@ export async function fetchLlamaServerModelNames(baseUrl) {
   try {
     for (const endpoint of endpoints) {
       try {
-        const res = await fetch(endpoint, { signal: ctrl.signal });
+        const res = await fetchLlamaServer(endpoint, { signal: ctrl.signal }, getConfig(), authOverrides);
         if (!res.ok) {
           lastDetail = `HTTP ${res.status} from ${endpoint}`;
           continue;
@@ -160,12 +166,29 @@ export function normalizeCatalogLlmProvider(raw) {
 
 /**
  * Combined catalog for Control Panel dropdown.
- * @param {{ llmProvider?: string }} [opts] When `llmProvider` is set, list models for that backend using saved URLs/keys (no full settings save required).
+ * @param {{ llmProvider?: string, llamaServerUrl?: string, llamaServerMode?: string, llamaServerApiKey?: string }} [opts]
+ * When `llmProvider` / llama fields are set, list models using those values (preview before save).
  */
 export async function buildModelCatalog(opts = {}) {
   const c = getConfig();
   const override = normalizeCatalogLlmProvider(opts.llmProvider);
   const llmProvider = override || c.llmProvider;
+  const previewUrl =
+    opts.llamaServerUrl != null && String(opts.llamaServerUrl).trim()
+      ? String(opts.llamaServerUrl).trim().replace(/\/$/, '')
+      : null;
+  const previewModeRaw =
+    opts.llamaServerMode != null ? String(opts.llamaServerMode).toLowerCase().trim() : null;
+  const previewMode =
+    previewModeRaw === 'remote' ? 'remote' : previewModeRaw === 'local' ? 'local' : null;
+  const effective = {
+    ...c,
+    llamaServerUrl: previewUrl || c.llamaServerUrl,
+    llamaServerMode: previewMode || c.llamaServerMode,
+  };
+  const llamaAuthOverrides = {};
+  const previewKey = String(opts.llamaServerApiKey ?? '').trim();
+  if (previewKey) llamaAuthOverrides.apiKey = previewKey;
   const gguf = [];
   try {
     const dir = c.modelsDir;
@@ -195,7 +218,7 @@ export async function buildModelCatalog(opts = {}) {
 
   let remote = { ok: false, models: [], error: null };
   if (llmProvider === 'llama-server') {
-    remote = await fetchLlamaServerModelNames(c.llamaServerUrl);
+    remote = await fetchLlamaServerModelNames(effective.llamaServerUrl, llamaAuthOverrides);
   } else if (llmProvider === 'ollama') {
     remote = await fetchOllamaModelNames(c.ollamaBaseUrl);
   } else if (llmProvider === 'openai') {
@@ -214,7 +237,8 @@ export async function buildModelCatalog(opts = {}) {
       combined.push({ id: m, source: 'remote', label: m });
     }
   }
-  const includeGguf = llmProvider === 'llama-server' || llmProvider === 'ollama';
+  const includeGguf =
+    llmProvider === 'ollama' || (llmProvider === 'llama-server' && !isLlamaServerRemote(effective));
   if (includeGguf) {
     for (const g of gguf) {
       if (!seen.has(g.id)) {
@@ -227,7 +251,9 @@ export async function buildModelCatalog(opts = {}) {
   return {
     provider: llmProvider,
     ollamaBaseUrl: c.ollamaBaseUrl,
-    llamaServerUrl: c.llamaServerUrl,
+    llamaServerUrl: effective.llamaServerUrl,
+    llamaServerMode: effective.llamaServerMode,
+    llamaServerRemote: isLlamaServerRemote(effective),
     engineDir: c.engineDir,
     selectedModel: c.llmModel,
     remoteOk: remote.ok,
