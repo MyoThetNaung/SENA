@@ -44,6 +44,34 @@ export default [
     },
   },
   {
-    ignores: ['node_modules/**', 'data/**', 'OpenHardwareMonitor/**'],
+    files: ['web/**/*.{js,jsx}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      parserOptions: {
+        ecmaFeatures: { jsx: true },
+      },
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        fetch: 'readonly',
+        console: 'readonly',
+        process: 'readonly',
+        React: 'readonly',
+        confirm: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': 'off',
+    },
+  },
+  {
+    ignores: ['node_modules/**', 'data/**', 'OpenHardwareMonitor/**', 'web/.next/**', 'web/node_modules/**'],
   },
 ];

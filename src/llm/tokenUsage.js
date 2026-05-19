@@ -8,6 +8,13 @@ export function localDayKey(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
+/** Calendar month YYYY-MM (for per-user monthly usage). */
+export function monthKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
 function tokensPerSec(row) {
   const total = (row.prompt_tokens || 0) + (row.completion_tokens || 0);
   const ms = row.duration_ms || 0;
@@ -22,23 +29,114 @@ function tokensPerSec(row) {
  * @param {number} p.promptTokens
  * @param {number} p.completionTokens
  * @param {number} p.durationMs
+ * @param {number|null} [p.soulUserId]
  */
 export async function recordLlmUsage(p) {
   try {
     const now = new Date();
     const dayKey = localDayKey(now);
+    const mKey = monthKey(now);
     const createdAt = now.toISOString();
     const promptTokens = Math.max(0, Math.floor(Number(p.promptTokens) || 0));
     const completionTokens = Math.max(0, Math.floor(Number(p.completionTokens) || 0));
     const durationMs = Math.max(0, Math.floor(Number(p.durationMs) || 0));
+    const soulUserId =
+      p.soulUserId != null && Number.isFinite(Number(p.soulUserId)) ? Number(p.soulUserId) : null;
     await query(
-      `INSERT INTO llm_usage (created_at, day_key, provider, model, prompt_tokens, completion_tokens, duration_ms)
-       VALUES ($1::timestamptz, $2, $3, $4, $5, $6, $7)`,
-      [createdAt, dayKey, String(p.provider || ''), String(p.model || ''), promptTokens, completionTokens, durationMs]
+      `INSERT INTO llm_usage (
+         created_at, day_key, month_key, soul_user_id, provider, model,
+         prompt_tokens, completion_tokens, duration_ms
+       ) VALUES ($1::timestamptz, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        createdAt,
+        dayKey,
+        mKey,
+        soulUserId,
+        String(p.provider || ''),
+        String(p.model || ''),
+        promptTokens,
+        completionTokens,
+        durationMs,
+      ]
     );
   } catch {
     /* never break chat if metrics fail */
   }
+}
+
+/**
+ * Monthly token totals for one soul user.
+ * @param {number} soulUserId
+ * @param {string} [month] YYYY-MM, defaults to current month
+ */
+export async function getUserMonthlyTokenUsage(soulUserId, month = monthKey()) {
+  const uid = Number(soulUserId);
+  const mk = String(month || monthKey()).trim();
+  const r = await query(
+    `SELECT
+       COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_sum,
+       COALESCE(SUM(completion_tokens), 0)::bigint AS completion_sum,
+       COUNT(*)::int AS request_count
+     FROM llm_usage
+     WHERE soul_user_id = $1 AND month_key = $2`,
+    [uid, mk]
+  );
+  const row = r.rows[0] || {};
+  const prompt = Number(row.prompt_sum || 0);
+  const completion = Number(row.completion_sum || 0);
+  return {
+    month: mk,
+    soulUserId: uid,
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: prompt + completion,
+    requestCount: row.request_count || 0,
+  };
+}
+
+/**
+ * Monthly token totals for all users with usage in that month (plus allowlist labels).
+ * @param {string} [month] YYYY-MM
+ */
+export async function getAllUsersMonthlyTokenUsage(month = monthKey()) {
+  const mk = String(month || monthKey()).trim();
+  const r = await query(
+    `SELECT
+       u.soul_user_id,
+       COALESCE(SUM(u.prompt_tokens), 0)::bigint AS prompt_sum,
+       COALESCE(SUM(u.completion_tokens), 0)::bigint AS completion_sum,
+       COUNT(*)::int AS request_count
+     FROM llm_usage u
+     WHERE u.soul_user_id IS NOT NULL AND u.month_key = $1
+     GROUP BY u.soul_user_id
+     ORDER BY (COALESCE(SUM(u.prompt_tokens), 0) + COALESCE(SUM(u.completion_tokens), 0)) DESC`,
+    [mk]
+  );
+
+  const users = [];
+  for (const row of r.rows) {
+    const soulUserId = Number(row.soul_user_id);
+    const prompt = Number(row.prompt_sum || 0);
+    const completion = Number(row.completion_sum || 0);
+    const allowR = await query(
+      `SELECT email, username, soul_user_id FROM telegram_allowlist WHERE soul_user_id = $1 LIMIT 1`,
+      [soulUserId]
+    );
+    const allow = allowR.rows[0];
+    const soulR = await query(`SELECT display_name FROM soul WHERE user_id = $1`, [soulUserId]);
+    const displayName = String(soulR.rows[0]?.display_name || '').trim();
+    users.push({
+      soulUserId,
+      displayName: displayName || null,
+      email: allow?.email || null,
+      username: allow?.username || null,
+      promptTokens: prompt,
+      completionTokens: completion,
+      totalTokens: prompt + completion,
+      requestCount: row.request_count || 0,
+    });
+  }
+  return { month: mk, users };
 }
 
 /** Last N days (oldest first), local calendar. */

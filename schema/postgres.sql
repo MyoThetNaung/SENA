@@ -75,6 +75,33 @@ CREATE TABLE IF NOT EXISTS llm_usage (
 
 CREATE INDEX IF NOT EXISTS idx_llm_usage_day ON llm_usage (day_key);
 
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS soul_user_id BIGINT;
+ALTER TABLE llm_usage ADD COLUMN IF NOT EXISTS month_key TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user_month ON llm_usage (soul_user_id, month_key)
+  WHERE soul_user_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  event_type TEXT NOT NULL,
+  actor_role TEXT,
+  actor_admin_id BIGINT,
+  actor_soul_user_id BIGINT,
+  target_soul_user_id BIGINT,
+  ip_address TEXT,
+  user_agent TEXT,
+  http_method TEXT,
+  http_path TEXT,
+  status_code INTEGER,
+  metadata JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs (event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_soul ON audit_logs (actor_soul_user_id)
+  WHERE actor_soul_user_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS user_records (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES soul (user_id) ON DELETE CASCADE,

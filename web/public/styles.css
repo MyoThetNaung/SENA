@@ -3755,3 +3755,35 @@ button:disabled {
 .shell {
   padding-top: 0;
 }
+
+/* User portal (limited access) */
+.user-portal .user-overview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.user-portal .user-bot-readonly .switch {
+  display: none;
+}
+
+.user-detail-list {
+  margin: 0;
+}
+
+.user-detail-list dl > div {
+  display: grid;
+  grid-template-columns: 10rem 1fr;
+  gap: 0.5rem 1rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(120, 150, 255, 0.12);
+}
+
+.user-detail-list dt {
+  margin: 0;
+  font-weight: 600;
+  color: rgba(200, 210, 255, 0.85);
+}
+
+.user-detail-list dd {
+  margin: 0;
+  color: rgba(230, 235, 255, 0.95);
+}

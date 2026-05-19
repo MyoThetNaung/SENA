@@ -2,11 +2,7 @@ import fs from 'fs';
 import { createBot } from './bot/telegram.js';
 import { assertBotConfigReady, getConfig } from './config.js';
 import { getPool } from './db.js';
-import {
-  startLlamaServerIfConfigured,
-  stopLlamaServerIfWeStarted,
-  ensureLlamaServerReachable,
-} from './llm/llamaProcess.js';
+import { ensureLlmBackendReachable } from './llm/llamaProcess.js';
 import { logger } from './logger.js';
 import { closeBrowser } from './tools/browser.js';
 
@@ -37,14 +33,9 @@ try {
 await getPool();
 
 try {
-  const llama = await startLlamaServerIfConfigured(false);
-  if (!llama.ok) {
-    logger.error(llama.error || 'llama-server autostart failed');
-    process.exit(1);
-  }
-  const reach = await ensureLlamaServerReachable();
+  const reach = await ensureLlmBackendReachable();
   if (!reach.ok) {
-    logger.error(reach.error || 'llama-server unreachable');
+    logger.error(reach.error || 'LLM backend unreachable');
     process.exit(1);
   }
   for (const [idx, token] of (cfg.telegramBotTokens || []).entries()) {
@@ -52,7 +43,6 @@ try {
   }
 } catch (e) {
   logger.error(`Startup failed: ${e.message}`);
-  await stopLlamaServerIfWeStarted().catch(() => {});
   process.exit(1);
 }
 
@@ -63,7 +53,6 @@ async function shutdown(signal) {
   } catch (e) {
     logger.warn(`Browser close: ${e.message}`);
   }
-  await stopLlamaServerIfWeStarted().catch(() => {});
   process.exit(0);
 }
 

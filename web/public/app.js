@@ -714,12 +714,7 @@ function formatChatTimestampLocal(s) {
 }
 
 function isLlamaRemoteModeFromForm() {
-  const sel = $('llamaServerMode');
-  if (sel) return String(sel.value || 'local').trim() === 'remote';
-  const s = lastSettingsForGui || {};
-  if (s.llamaServerMode === 'remote' || s.llamaServerRemote) return true;
-  if (s.llamaServerExternal === true) return true;
-  return false;
+  return true;
 }
 
 function syncLlamaModelPickersFromHidden() {
@@ -797,23 +792,19 @@ function updateProviderVisibility() {
   $('wrapOpenAi')?.classList.toggle('hidden', p !== 'openai');
   $('wrapOpenRouter')?.classList.toggle('hidden', p !== 'openrouter');
   $('wrapGemini')?.classList.toggle('hidden', p !== 'gemini');
-  $('wrapLlamaLocalModels')?.classList.toggle('hidden', p !== 'llama-server' || llamaRemote);
-  $('wrapLlamaRemoteAuth')?.classList.toggle('hidden', !llamaRemote);
-  $('wrapLlamaRemoteModels')?.classList.toggle('hidden', !llamaRemote);
+  $('wrapLlamaLocalModels')?.classList.add('hidden');
   $('localLlmActions')?.classList.toggle('hidden', !isLocalLlmProvider(p));
-  $('btnStartEmbeddedServer')?.classList.toggle('hidden', p !== 'llama-server' || llamaRemote);
   const hint = $('localLlmTestHint');
   if (hint) {
     hint.classList.toggle('hidden', !isLocalLlmProvider(p));
     if (isLocalLlmProvider(p)) {
-      hint.textContent = llamaRemote
-        ? 'Test the remote llama.cpp URL (and API key if set) before saving.'
-        : 'For local backends, test the current base URL before saving.';
+      hint.textContent =
+        p === 'llama-server'
+          ? 'Test your llama.cpp server URL (and API key if set) before saving.'
+          : 'Test the Ollama base URL before saving.';
     }
   }
-  applyEmbeddedStartDisabledState();
-  refreshEmbeddedServerButtonState().catch(() => {});
-  if (llamaRemote) populateRemoteModelSelect().catch(() => {});
+  if (p === 'llama-server') populateRemoteModelSelect().catch(() => {});
 }
 
 const CHAT_SESSION_STORAGE_KEY = 'guiChatSessionUserId';
@@ -824,119 +815,6 @@ let lastChatMessages = [];
 
 let syncingWebSearchInputs = false;
 let webSearchSaving = false;
-let embeddedServerRunning = false;
-let embeddedStartInFlight = false;
-
-function setEmbeddedServerButtonRunning(running) {
-  embeddedServerRunning = Boolean(running);
-  const btn = $('btnStartEmbeddedServer');
-  if (!btn) return;
-  btn.textContent = embeddedServerRunning ? 'Stop Embedded Server' : 'Start Embedded Server';
-  btn.classList.toggle('danger', embeddedServerRunning);
-  btn.classList.toggle('primary', !embeddedServerRunning);
-  applyEmbeddedStartDisabledState();
-}
-
-function updateEngineEmbeddedStatusFromJson(j) {
-  const badge = $('embeddedServerStatusBadge');
-  const detail = $('embeddedServerStatusDetail');
-  const prov = String($('llmProvider')?.value || '').trim().toLowerCase();
-  if (!badge) return;
-  if (prov !== 'llama-server') {
-    badge.textContent = '—';
-    badge.className = 'embedded-status-badge embedded-status--neutral';
-    if (detail) detail.textContent = '';
-    return;
-  }
-  if (isLlamaRemoteModeFromForm()) {
-    const url = String($('llamaServerUrl')?.value || '').trim();
-    const listening = Boolean(j?.listening);
-    badge.textContent = listening ? 'Remote online' : 'Remote offline';
-    badge.className = listening
-      ? 'embedded-status-badge embedded-status--running'
-      : 'embedded-status-badge embedded-status--offline';
-    if (detail) {
-      detail.textContent = listening
-        ? `Using online server at ${url}`
-        : `Cannot reach ${url}. Test connection or check API key.`;
-    }
-    return;
-  }
-  if (embeddedStartInFlight) {
-    badge.textContent = 'Starting…';
-    badge.className = 'embedded-status-badge embedded-status--starting';
-    if (detail) detail.textContent = 'Launching llama-server with your selected files.';
-    return;
-  }
-  const panel = j.embeddedPanel || {};
-  const running = Boolean(j.embeddedRunning);
-  const listening = Boolean(j.listening);
-  const lastErr = String(panel.lastError || '').trim();
-
-  if (running && listening) {
-    const p = panel.port || String(parseLlamaBindFromForm().port);
-    badge.textContent = `Running on port ${p}`;
-    badge.className = 'embedded-status-badge embedded-status--running';
-    if (detail) detail.textContent = '';
-  } else if (running && !listening) {
-    badge.textContent = 'Starting…';
-    badge.className = 'embedded-status-badge embedded-status--starting';
-    if (detail) detail.textContent = 'Process is running; waiting for the HTTP API to respond.';
-  } else if (lastErr) {
-    badge.textContent = 'Error';
-    badge.className = 'embedded-status-badge embedded-status--error';
-    if (detail) detail.textContent = lastErr.length > 280 ? `${lastErr.slice(0, 280)}…` : lastErr;
-  } else {
-    badge.textContent = 'Offline';
-    badge.className = 'embedded-status-badge embedded-status--offline';
-    if (detail) detail.textContent = '';
-  }
-}
-
-function applyEmbeddedStartDisabledState() {
-  const btn = $('btnStartEmbeddedServer');
-  if (!btn) return;
-  const prov = String($('llmProvider')?.value || '').trim().toLowerCase();
-  if (prov !== 'llama-server' || isLlamaRemoteModeFromForm()) {
-    btn.disabled = false;
-    return;
-  }
-  if (embeddedStartInFlight) {
-    btn.disabled = true;
-    return;
-  }
-  const gguf = $('ggufPath')?.value?.trim() || '';
-  if (embeddedServerRunning) {
-    btn.disabled = false;
-    return;
-  }
-  btn.disabled = !gguf;
-}
-
-async function refreshEmbeddedServerButtonState() {
-  const provider = String($('llmProvider')?.value || '').trim().toLowerCase();
-  if (!isLocalLlmProvider(provider)) {
-    setEmbeddedServerButtonRunning(false);
-    updateEngineEmbeddedStatusFromJson({});
-    return;
-  }
-  if (provider === 'ollama') {
-    setEmbeddedServerButtonRunning(false);
-    updateEngineEmbeddedStatusFromJson({});
-    return;
-  }
-  try {
-    const r = await apiFetch('/api/llm/server-status');
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Status failed');
-    setEmbeddedServerButtonRunning(Boolean(j.embeddedRunning));
-    updateEngineEmbeddedStatusFromJson(j);
-  } catch {
-    setEmbeddedServerButtonRunning(false);
-    updateEngineEmbeddedStatusFromJson({});
-  }
-  applyEmbeddedStartDisabledState();
-}
 
 function webSearchToggleInputs() {
   return [$('webSearchEnabled'), $('overviewWebSearch')].filter(Boolean);
@@ -1073,11 +951,6 @@ async function loadSettingsIntoForm() {
   renderTelegramTokenList(s.telegramBotTokensMasked, botIdentityByIndex);
   $('ollamaBaseUrl').value = s.ollamaBaseUrl || 'http://127.0.0.1:11434';
   $('llamaServerUrl').value = s.llamaServerUrl || 'http://127.0.0.1:8080';
-  if ($('llamaServerMode')) {
-    const remoteMode =
-      s.llamaServerMode === 'remote' || Boolean(s.llamaServerRemote) || s.llamaServerExternal === true;
-    $('llamaServerMode').value = remoteMode ? 'remote' : 'local';
-  }
   if ($('llamaServerApiKey')) $('llamaServerApiKey').value = '';
   const llamaKeyHint = $('llamaServerApiKeyHint');
   if (llamaKeyHint) {
@@ -1860,8 +1733,6 @@ async function loadOverview() {
     } else {
       setStatusLed($('overviewServerLed'), 'idle');
     }
-    setEmbeddedServerButtonRunning(Boolean(ss.embeddedRunning));
-    updateEngineEmbeddedStatusFromJson(ss);
   } catch {
     llmServerOnline = false;
     const lineEl = $('overviewServerLine');
@@ -1869,8 +1740,6 @@ async function loadOverview() {
     if (lineEl) lineEl.textContent = '?';
     if (subEl) subEl.textContent = '';
     setStatusLed($('overviewServerLed'), 'unknown');
-    setEmbeddedServerButtonRunning(false);
-    updateEngineEmbeddedStatusFromJson({});
   }
 
   const activeModelCard = $('overviewCardActiveModel');
@@ -2400,6 +2269,103 @@ function renderMemoryBotSelect(bots) {
   }
 }
 
+function ensureMemoryBotTabsHost() {
+  let wrap = $('memBotTabsWrap');
+  const host = $('memBotSelect')?.closest('.mem-bot-select-wrap');
+  if (!host) return null;
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'memBotTabsWrap';
+    wrap.className = 'mem-bot-tabs-wrap';
+    wrap.innerHTML =
+      '<div class="mem-bot-tabs-label">Bots</div><div id="memBotTabs" class="mem-bot-tabs" role="tablist"></div>';
+    host.insertBefore(wrap, host.firstChild);
+    wrap = $('memBotTabsWrap');
+    const tabsEl = $('memBotTabs');
+    if (tabsEl?.parentElement && tabsEl.parentElement !== wrap) {
+      wrap.appendChild(tabsEl);
+    }
+  }
+  return $('memBotTabs');
+}
+
+function renderMemoryBotTabs(bots) {
+  renderMemoryBotSelect(bots);
+  const tabs = ensureMemoryBotTabsHost() || $('memBotTabs');
+  if (!tabs) return;
+
+  const list = Array.isArray(bots) ? bots : [];
+  tabs.replaceChildren();
+  if (!list.length) {
+    const empty = document.createElement('span');
+    empty.className = 'hint';
+    empty.textContent = 'No Telegram bots — add tokens on the Telegram tab';
+    tabs.appendChild(empty);
+    return;
+  }
+
+  let idx = 0;
+  for (const b of list) {
+    const botId = Number(b.botId);
+    if (!Number.isFinite(botId)) continue;
+    idx += 1;
+    const uname = String(b?.username || '').trim().replace(/^@+/, '');
+    const label = uname
+      ? getMemoryBotLabel(botId, `@${uname}`)
+      : getMemoryBotLabel(botId, `Bot ${idx}`);
+    const active = currentMemoryBotId === botId;
+
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = `mem-bot-tab${active ? ' active' : ''}`;
+    tab.dataset.botId = String(botId);
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'mem-bot-tab-label';
+    nameEl.textContent = label;
+    tab.appendChild(nameEl);
+
+    const edit = document.createElement('span');
+    edit.className = 'mem-bot-tab-edit';
+    edit.setAttribute('role', 'button');
+    edit.tabIndex = 0;
+    edit.title = 'Rename';
+    edit.textContent = '✎';
+    edit.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const next = window.prompt(`Rename label for Bot ${botId}:`, getMemoryBotLabel(botId));
+      if (next == null) return;
+      saveMemoryBotTabName(botId, next)
+        .then(() => loadDataTab())
+        .catch((e) => setStatus(e.message, 'err'));
+    });
+    edit.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        edit.click();
+      }
+    });
+    tab.appendChild(edit);
+
+    tab.addEventListener('click', () => {
+      if (currentMemoryBotId === botId) return;
+      currentMemoryBotId = botId;
+      try {
+        localStorage.setItem(MEMORY_BOT_KEY, String(botId));
+      } catch {
+        /* ignore */
+      }
+      const sel = $('memBotSelect');
+      if (sel) sel.value = String(botId);
+      renderMemoryBotTabs(list);
+      loadDataTab().catch((e) => setStatus(e.message, 'err'));
+    });
+
+    tabs.appendChild(tab);
+  }
+}
 
 async function saveMemoryBotTabName(botId, name) {
   const existing =
@@ -2442,7 +2408,7 @@ async function loadMemoryBotOptions() {
   } catch {
     /* ignore */
   }
-  renderMemoryBotSelect(bots);
+  renderMemoryBotTabs(bots);
 }
 
 async function loadMemorySessionsIntoSelects() {
@@ -3098,7 +3064,7 @@ function buildLlamaEnginePatch() {
     ? String($('llmModelRemote')?.value || $('llmModel')?.value || '').trim()
     : String($('llmModel')?.value || '').trim() || getModelIdFromGgufLabel();
   const patch = {
-    llamaServerMode: remote ? 'remote' : 'local',
+    llamaServerMode: 'remote',
   };
   const urlEl = $('llamaServerUrl');
   if (urlEl) patch.llamaServerUrl = urlEl.value.trim();
@@ -3117,10 +3083,6 @@ async function saveEngineSettingsOnly() {
     modelsDir: modelsDirValue,
     ...buildLlamaEnginePatch(),
   };
-  if (!llamaRemote) {
-    body.ggufPath = $('ggufPath')?.value?.trim() || '';
-    body.mmprojPath = $('mmprojPath')?.value?.trim() || '';
-  }
   const r = await apiFetch('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -3130,12 +3092,6 @@ async function saveEngineSettingsOnly() {
   if (!r.ok) throw new Error(j.error || 'Save failed');
   lastSettingsForGui = j.settings || lastSettingsForGui;
   const s = j.settings || {};
-  if ($('llamaServerMode')) {
-    const remoteMode =
-      s.llamaServerMode === 'remote' || Boolean(s.llamaServerRemote) || s.llamaServerExternal === true;
-    $('llamaServerMode').value = remoteMode ? 'remote' : 'local';
-    updateProviderVisibility();
-  }
   const ggufEl = $('ggufPath');
   if (ggufEl) {
     const resolvedGguf = String(s.ggufPath || '').trim();
@@ -3158,104 +3114,6 @@ async function saveEngineSettingsOnly() {
   updateSelectedGgufLabel($('llmModel')?.value || '');
   updateSelectedMmprojLabel();
   return j.settings || {};
-}
-
-async function startEmbeddedLlamaServer() {
-  const provider = String($('llmProvider')?.value || '').trim().toLowerCase();
-  if (!isLocalLlmProvider(provider)) {
-    setStatus('Embedded server is available for local backends.', 'err');
-    return;
-  }
-  const btn = $('btnStartEmbeddedServer');
-  const label = provider === 'ollama' ? 'Ollama' : 'llama.cpp';
-  try {
-    if (embeddedServerRunning) {
-      if (btn) btn.disabled = true;
-      setStatus(`Stopping embedded ${label} server…`, '');
-      const r = await apiFetch('/api/llm/stop-server', { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Stop failed');
-      const msg = 'Embedded server stopped.';
-      setStatus(msg, 'ok');
-      logLine(msg);
-      showToast(msg, 'ok');
-      setEmbeddedServerButtonRunning(false);
-      await loadOverview();
-      await refreshEmbeddedServerButtonState();
-      return;
-    }
-    const ggufPathCheck = $('ggufPath')?.value?.trim() || '';
-    if (provider === 'llama-server' && isLlamaRemoteModeFromForm()) {
-      setStatus('Embedded server is not used for remote mode.', 'err');
-      return;
-    }
-    if (provider === 'llama-server' && !ggufPathCheck) {
-      const msg = 'Pick a main .gguf model file before starting the embedded server.';
-      setStatus(msg, 'err');
-      showToast(msg, 'err');
-      return;
-    }
-    embeddedStartInFlight = true;
-    applyEmbeddedStartDisabledState();
-    updateEngineEmbeddedStatusFromJson({ embeddedPanel: {}, embeddedRunning: false, listening: false });
-    if (btn) btn.disabled = true;
-    setStatus(`Starting embedded ${label} server…`, '');
-    try {
-      if (provider === 'llama-server') {
-        await saveEngineSettingsOnly();
-        const bind = parseLlamaBindFromForm();
-        const ggufPath = $('ggufPath')?.value?.trim() || '';
-        const mmprojPath = $('mmprojPath')?.value?.trim() || '';
-        const r = await apiFetch('/api/llm/start-embedded', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ggufPath,
-            mmprojPath,
-            ctxSize: 4096,
-            host: bind.host,
-            port: bind.port,
-          }),
-        });
-        const j = await r.json();
-        if (!r.ok) {
-          const err = String(j.error || 'Start failed');
-          showToast(err, 'err');
-          throw new Error(err);
-        }
-        const msg = `Embedded llama-server listening at ${j.url || ''}.`;
-        setStatus(msg, 'ok');
-        logLine(msg);
-        showToast('Embedded llama-server started.', 'ok');
-        await loadSettingsIntoForm();
-        setEmbeddedServerButtonRunning(true);
-        await loadOverview();
-        return;
-      }
-      await saveEngineSettingsOnly();
-      const r = await apiFetch('/api/llm/start-server', { method: 'POST' });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Start failed');
-      const msg = j.skipped ? 'Server already running.' : `Embedded ${label} server started.`;
-      setStatus(msg, 'ok');
-      logLine(msg);
-      showToast(msg, 'ok');
-      setEmbeddedServerButtonRunning(true);
-      await loadOverview();
-    } finally {
-      embeddedStartInFlight = false;
-      applyEmbeddedStartDisabledState();
-      if (btn) btn.disabled = false;
-      await refreshEmbeddedServerButtonState();
-    }
-  } catch (e) {
-    setStatus(e.message, 'err');
-    logLine('Embedded server toggle: ' + e.message);
-    embeddedStartInFlight = false;
-    applyEmbeddedStartDisabledState();
-    if (btn) btn.disabled = false;
-    await refreshEmbeddedServerButtonState();
-  }
 }
 
 async function pickGgufFile() {
@@ -3382,13 +3240,6 @@ $('llmProvider').addEventListener('change', () => {
   refreshModelDropdown('', { resetSelection: true }).catch(() => {});
 });
 
-$('llamaServerMode')?.addEventListener('change', () => {
-  updateProviderVisibility();
-  if (!isLlamaRemoteModeFromForm()) {
-    refreshModelDropdown($('llmModel')?.value || '', { resetSelection: false }).catch(() => {});
-  }
-});
-
 $('btnRefreshRemoteModels')?.addEventListener('click', () => {
   populateRemoteModelSelect($('llmModelRemote')?.value || $('llmModel')?.value).catch((e) =>
     setStatus(e.message, 'err')
@@ -3404,10 +3255,6 @@ $('btnRefreshModels')?.addEventListener('click', () => {
 
 $('btnTestLocalLlm')?.addEventListener('click', () => {
   testLocalLlmConnection().catch((e) => setStatus(e.message, 'err'));
-});
-
-$('btnStartEmbeddedServer')?.addEventListener('click', () => {
-  startEmbeddedLlamaServer().catch((e) => setStatus(e.message, 'err'));
 });
 
 $('btnPickGgufFile')?.addEventListener('click', () => {
@@ -3500,12 +3347,13 @@ async function saveTelegramTokenFromField() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Save failed');
     logLine('Telegram bot token added.');
-    const botSt = await apiFetch('/api/bot/status').then((r) => r.json()).catch(() => ({}));
-    const restartHint =
-      botSt?.running && Number(botSt.botCount) !== Number(botSt.configuredBotCount)
-        ? ' Stop the bot (sidebar), then start again to run all bots.'
-        : '';
-    setStatus(`Bot token added.${restartHint}`, restartHint ? 'err' : 'ok');
+    const syncMsg =
+      j.botSync?.started > 0
+        ? ` ${j.botSync.started} bot(s) started automatically.`
+        : j.botSync?.ok === false
+          ? ` Saved, but could not start new bot: ${j.botSync.error}`
+          : '';
+    setStatus(`Bot token added.${syncMsg}`, j.botSync?.ok === false ? 'err' : 'ok');
     await loadSettingsIntoForm();
     await loadOverview();
     await refreshSidebarBotPowerUi();
@@ -3546,9 +3394,16 @@ async function removeTelegramTokenByIndex(idx) {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || 'Remove failed');
     logLine(`${label} token removed.`);
-    setStatus(`${label} removed.`, 'ok');
+    const syncMsg =
+      j.botSync?.stopped > 0
+        ? ` Polling stopped for ${j.botSync.stopped} bot(s).`
+        : j.botSync?.ok === false
+          ? ` Removed from settings, but stop failed: ${j.botSync.error}`
+          : '';
+    setStatus(`${label} removed.${syncMsg}`, j.botSync?.ok === false ? 'err' : 'ok');
     await loadSettingsIntoForm();
     await loadOverview();
+    await refreshSidebarBotPowerUi();
   } catch (e) {
     setStatus(e.message, 'err');
     logLine('Telegram token remove: ' + e.message);
@@ -3639,10 +3494,7 @@ if ($('btnSaveBotPersona')) {
       const r = await apiFetch(`/api/soul/${uid}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          botPersona,
-          profile: { timezone: getMemTimezoneValue() },
-        }),
+        body: JSON.stringify({ botPersona, profile: { timezone: getMemTimezoneValue() } }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Save failed');

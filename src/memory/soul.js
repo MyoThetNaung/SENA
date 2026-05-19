@@ -3,6 +3,22 @@ import { SCOPED_USER_ID_OFFSET } from '../access/telegramAccess.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import { normalizeTimezone } from '../util/timezone.js';
 
+export const DEFAULT_USER_TIMEZONE = 'Asia/Rangoon';
+
+/** Set profile timezone when missing (new web users default to Myanmar). */
+export async function ensureDefaultUserTimezone(userId) {
+  await ensureSoul(userId);
+  const soul = await getSoul(userId);
+  const prof =
+    soul.preferences?.profile && typeof soul.preferences.profile === 'object'
+      ? soul.preferences.profile
+      : {};
+  if (normalizeTimezone(prof.timezone)) return;
+  await setSoulContent(userId, {
+    profile: { ...prof, timezone: DEFAULT_USER_TIMEZONE },
+  });
+}
+
 function safeJsonParse(s, fallback) {
   try {
     return JSON.parse(s);

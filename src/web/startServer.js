@@ -2,16 +2,34 @@
  * Next.js custom server + Express API (`npm run gui` / `web/server.mjs`).
  */
 import { createServer } from 'http';
-import { parse } from 'url';
+import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import next from 'next';
+import { createRequire } from 'module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDir = path.join(__dirname, '..', '..', 'web');
-const projectRoot = path.join(__dirname, '..', '..');
+const requireFromWeb = createRequire(path.join(webDir, 'package.json'));
 
 let started = null;
+
+/**
+ * Build a `url.parse`-compatible object for Next's request handler (WHATWG URL, no `url.parse`).
+ * @param {string | undefined} reqUrl
+ * @param {string} hostHeader
+ * @param {number} port
+ */
+function parseRequestUrl(reqUrl, hostHeader, port) {
+  const host = (hostHeader && String(hostHeader).trim()) || `127.0.0.1:${port}`;
+  const absolute = new URL(reqUrl || '/', `http://${host}`);
+  /** @type {Record<string, string | string[]>} */
+  const query = {};
+  for (const key of absolute.searchParams.keys()) {
+    const values = absolute.searchParams.getAll(key);
+    query[key] = values.length > 1 ? values : values[0];
+  }
+  return { pathname: absolute.pathname || '/', query };
+}
 
 /**
  * @param {{ port?: number, host?: string, dev?: boolean }} [options]
@@ -29,8 +47,6 @@ export async function startSenaWebServer(options = {}) {
   const bindHost = host.toLowerCase() === 'localhost' ? '127.0.0.1' : host;
   const logHost = bindHost === '0.0.0.0' ? '127.0.0.1' : bindHost;
 
-  process.chdir(projectRoot);
-
   const { createApiApp } = await import('../gui/server.js');
   const { getPool } = await import('../db.js');
   const { initAuth } = await import('../auth/routes.js');
@@ -42,6 +58,15 @@ export async function startSenaWebServer(options = {}) {
   await initAuth();
 
   logger.info('Starting Next.js…');
+  // Keep Next runtime path resolution anchored to the web app directory.
+  process.chdir(webDir);
+  // Optional full clean (SENA_WEB_CLEAR_NEXT=1). Avoid wiping `.next` on every dev boot:
+  // it can leave an open browser on a stale webpack runtime and trigger
+  // "Cannot read properties of undefined (reading 'call')" in the client chunk loader.
+  if (dev && String(process.env.SENA_WEB_CLEAR_NEXT || '').trim() === '1') {
+    await fs.rm(path.join(webDir, '.next'), { recursive: true, force: true });
+  }
+  const next = requireFromWeb('next');
   const nextApp = next({ dev, dir: webDir });
   const handle = nextApp.getRequestHandler();
   const apiApp = createApiApp();
@@ -49,7 +74,7 @@ export async function startSenaWebServer(options = {}) {
   await nextApp.prepare();
 
   const server = createServer((req, res) => {
-    const parsedUrl = parse(req.url, true);
+    const parsedUrl = parseRequestUrl(req.url, req.headers.host, port);
     const pathname = parsedUrl.pathname || '/';
     if (pathname.startsWith('/api')) {
       apiApp(req, res);
@@ -66,6 +91,7 @@ export async function startSenaWebServer(options = {}) {
   const url = `http://${logHost}:${port}`;
   logger.info(`SENA web: ${url}`);
   logger.info(`Admin panel: ${url}/admin.html`);
+  logger.info(`User portal: ${url}/user.html`);
 
   started = { server, port, url };
   return started;

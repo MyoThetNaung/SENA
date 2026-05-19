@@ -51,6 +51,7 @@ function loginRedirect(req, params = {}) {
 }
 
 function appRedirect(req) {
+  // User overview lives at /app in the Next.js UI.
   return `${requestOrigin(req)}/app`;
 }
 

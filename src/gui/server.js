@@ -59,18 +59,17 @@ import {
   fetchOllamaModelNames,
 } from '../llm/catalog.js';
 import { fetchOpenAiModelNames, fetchOpenRouterModelNames, fetchGeminiModelNames } from '../llm/cloudLlm.js';
-import { startBotFromGui, stopBotFromGui, getBotStatus } from './bot-runner.js';
 import {
-  startLlamaServerIfConfigured,
-  startOllamaServerIfConfigured,
-  stopLlamaServerIfWeStarted,
-  llamaProcessRunning,
-  embeddedLlmProcessRunning,
-  startEmbeddedLlamaServerFromPaths,
-  getEmbeddedLlamaPanelState,
-} from '../llm/llamaProcess.js';
+  startBotFromGui,
+  stopBotFromGui,
+  getBotStatus,
+  applyTelegramTokenListChange,
+} from './bot-runner.js';
+import { createUserRouter } from './userRoutes.js';
 import { logger, syncLoggerLevel } from '../logger.js';
-import { getLlmUsageStats } from '../llm/tokenUsage.js';
+import { getLlmUsageStats, getAllUsersMonthlyTokenUsage, getUserMonthlyTokenUsage, monthKey } from '../llm/tokenUsage.js';
+import { AUDIT_EVENT_TYPES, listAuditLogs } from '../audit/auditLog.js';
+import { auditMiddleware } from '../audit/middleware.js';
 import { getHardwareSnapshot } from './hardwareStats.js';
 import { createAuthRouter, initAuth } from '../auth/routes.js';
 import { readSessionToken } from '../auth/middleware.js';
@@ -233,7 +232,6 @@ function readSettingsForApi() {
     engineDir: c.engineDir,
     engineDirInput,
     openBrowserGui: c.openBrowserGui,
-    autoStartLlamaServer: c.autoStartLlamaServer,
     botPersona: c.botPersona,
     botPersonaByBotId: c.botPersonaByBotId || {},
     memoryBotNamesById: c.memoryBotNamesById || {},
@@ -329,8 +327,10 @@ export function createApiApp() {
   const app = express();
   app.use(cookieParser());
   app.use(express.json({ limit: '12mb' }));
+  app.use(auditMiddleware);
 
   app.use('/api/auth', createAuthRouter());
+  app.use('/api/user', createUserRouter());
 
   app.use(async (req, res, next) => {
     if (!req.path.startsWith('/api/')) return next();
@@ -460,6 +460,7 @@ export function createApiApp() {
       }
       if (typeof b.llamaServerUrl === 'string' && b.llamaServerUrl.trim()) {
         patch.llamaServerUrl = b.llamaServerUrl.trim().replace(/\/$/, '');
+        patch.llamaServerMode = 'remote';
       }
       if (b.llamaServerMode === 'local' || b.llamaServerMode === 'remote') {
         patch.llamaServerMode = b.llamaServerMode;
@@ -528,9 +529,6 @@ export function createApiApp() {
       if (typeof b.openBrowserGui === 'boolean') {
         patch.openBrowser = b.openBrowserGui;
       }
-      if (typeof b.autoStartLlamaServer === 'boolean') {
-        patch.autoStartLlamaServer = b.autoStartLlamaServer;
-      }
       if (b.botPersona && typeof b.botPersona === 'object' && !Array.isArray(b.botPersona)) {
         const bp = b.botPersona;
         patch.botPersona = {
@@ -585,7 +583,18 @@ export function createApiApp() {
         await resetDatabaseConnection();
       }
       syncLoggerLevel();
-      res.json({ ok: true, settings: readSettingsForApi() });
+
+      const tokenListTouched =
+        patch.telegramBotTokens !== undefined || patch.telegramBotToken !== undefined;
+      let botSync = null;
+      if (tokenListTouched) {
+        botSync = await applyTelegramTokenListChange();
+        if (!botSync.ok) {
+          logger.warn(`Telegram bot auto-sync after settings save: ${botSync.error}`);
+        }
+      }
+
+      res.json({ ok: true, settings: readSettingsForApi(), botSync });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
     }
@@ -647,7 +656,6 @@ export function createApiApp() {
     try {
       reloadConfig();
       const c = getConfig();
-      const spawnedByApp = llamaProcessRunning();
       let listening = false;
       let ollamaReachable = false;
       let cloudReachable = false;
@@ -700,9 +708,6 @@ export function createApiApp() {
         url: backendUrl,
         llamaServerMode: c.llamaServerMode,
         llamaServerRemote: c.llmProvider === 'llama-server' ? isLlamaServerRemote(c) : false,
-        spawnedByApp,
-        embeddedRunning: embeddedLlmProcessRunning(),
-        embeddedPanel: c.llmProvider === 'llama-server' ? getEmbeddedLlamaPanelState() : null,
         listening,
         ollamaReachable,
         online,
@@ -772,133 +777,6 @@ export function createApiApp() {
       });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
-    }
-  });
-
-  app.post('/api/llm/start-server', async (req, res) => {
-    try {
-      reloadConfig();
-      const c = getConfig();
-      if (c.llmProvider !== 'llama-server' && c.llmProvider !== 'ollama') {
-        res.status(400).json({
-          ok: false,
-          error: 'Set LLM backend to Ollama or llama.cpp server (Engine tab), save, then try again.',
-        });
-        return;
-      }
-      const out =
-        c.llmProvider === 'ollama'
-          ? await startOllamaServerIfConfigured(true)
-          : await startLlamaServerIfConfigured(true);
-      if (!out.ok) {
-        res.status(400).json({ ok: false, error: out.error || 'Start failed' });
-        return;
-      }
-      res.json({ ok: true, provider: c.llmProvider, skipped: out.skipped });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
-
-  app.post('/api/llm/stop-server', async (req, res) => {
-    try {
-      await stopLlamaServerIfWeStarted();
-      res.json({ ok: true });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
-
-  app.get('/api/llm/embedded-logs', (req, res) => {
-    try {
-      res.json({ ok: true, ...getEmbeddedLlamaPanelState() });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  });
-
-  app.post('/api/llm/start-embedded', async (req, res) => {
-    try {
-      reloadConfig();
-      const c = getConfig();
-      if (c.llmProvider !== 'llama-server') {
-        res.status(400).json({
-          ok: false,
-          error: 'Set LLM backend to llama.cpp server on the Engine tab, save settings, then try again.',
-        });
-        return;
-      }
-      if (isLlamaServerRemote(c)) {
-        res.status(400).json({
-          ok: false,
-          error: 'Embedded server is not used in remote mode. Set the online base URL on the Engine tab instead.',
-        });
-        return;
-      }
-      const b = req.body || {};
-      const ggufPath = resolveStoredModelsFilePath(String(b.ggufPath || '').trim());
-      const mmprojPathRaw = String(b.mmprojPath || '').trim();
-      const mmprojPath = mmprojPathRaw ? resolveStoredModelsFilePath(mmprojPathRaw) : '';
-      const ctxSize = b.ctxSize != null ? Number(b.ctxSize) : 4096;
-
-      if (!ggufPath) {
-        res.status(400).json({
-          ok: false,
-          error: 'Main model path is empty.',
-          embeddedPanel: getEmbeddedLlamaPanelState(),
-        });
-        return;
-      }
-
-      let host = String(b.host || '').trim();
-      let port = b.port != null ? Number(b.port) : NaN;
-      if (!host || !Number.isFinite(port) || port < 1) {
-        try {
-          const u = new URL(String(c.llamaServerUrl || 'http://127.0.0.1:8080').replace(/\/$/, ''));
-          host = u.hostname || '127.0.0.1';
-          const p = u.port;
-          port = Number(p || 8080);
-        } catch {
-          host = '127.0.0.1';
-          port = 8080;
-        }
-      }
-
-      const out = await startEmbeddedLlamaServerFromPaths({
-        ggufPath,
-        mmprojPath: mmprojPath || null,
-        host,
-        port,
-        ctxSize,
-      });
-      if (!out.ok) {
-        res.status(400).json({
-          ok: false,
-          error: out.error || 'Start failed',
-          embeddedPanel: getEmbeddedLlamaPanelState(),
-        });
-        return;
-      }
-      const url = `http://${host}:${port}`.replace(/\/$/, '');
-      const llmModel = path.basename(ggufPath).replace(/\.gguf$/i, '') || 'local';
-      const modelsDirForGguf = path.dirname(ggufPath);
-      saveSettingsToDisk({
-        llmProvider: 'llama-server',
-        llamaServerMode: 'local',
-        llamaServerExternal: null,
-        llamaServerUrl: url,
-        ggufPath,
-        mmprojPath: mmprojPath || '',
-        llmModel,
-        modelsDir: modelsDirForGguf,
-      });
-      res.json({
-        ok: true,
-        url,
-        embeddedPanel: getEmbeddedLlamaPanelState(),
-      });
-    } catch (e) {
-      res.status(500).json({ ok: false, error: e.message, embeddedPanel: getEmbeddedLlamaPanelState() });
     }
   });
 
@@ -1457,55 +1335,34 @@ export function createApiApp() {
     }
   });
 
-  app.get('/api/user/chat', async (req, res) => {
+  app.get('/api/admin/audit/event-types', (req, res) => {
+    res.json({ eventTypes: AUDIT_EVENT_TYPES });
+  });
+
+  app.get('/api/admin/audit', async (req, res) => {
     try {
       await getPool();
-      const userId = req.session.soulUserId;
-      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
-      const rows = await listChatMessages({ userId, limit });
-      res.json({ messages: rows, userId });
+      const eventType = req.query.eventType ? String(req.query.eventType).trim() : null;
+      const limit = req.query.limit;
+      const offset = req.query.offset;
+      res.json(await listAuditLogs({ eventType: eventType || undefined, limit, offset }));
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  app.post('/api/user/chat/send', async (req, res) => {
+  app.get('/api/admin/token-usage', async (req, res) => {
     try {
-      reloadConfig();
       await getPool();
-      const cfg = getConfig();
-      const userId = req.session.soulUserId;
-      const text = String((req.body || {}).text ?? '').trim();
-      const imageDataUrl = String((req.body || {}).imageDataUrl ?? '').trim();
-      if (!text && !imageDataUrl) {
-        res.status(400).json({ ok: false, error: 'Message text or image is required.' });
+      const month = String(req.query.month || monthKey()).trim() || monthKey();
+      const soulUserId = req.query.soulUserId != null ? Number(req.query.soulUserId) : null;
+      if (Number.isFinite(soulUserId)) {
+        res.json(await getUserMonthlyTokenUsage(soulUserId, month));
         return;
       }
-      const userPreview = text || '[image]';
-      await appendChatMessage(userId, 'user', userPreview);
-      const startedAt = Date.now();
-      try {
-        const out = imageDataUrl
-          ? await handleImageMessage(userId, text, imageDataUrl)
-          : await handleTextMessage(userId, text);
-        await appendChatMessage(userId, 'assistant', out.reply);
-        scheduleMemorySummaryRefresh(userId);
-        res.json({
-          ok: true,
-          reply: out.reply,
-          meta: {
-            elapsedMs: Date.now() - startedAt,
-            provider: String(cfg.llmProvider || '').trim() || 'unknown',
-            model: String(cfg.llmModel || '').trim() || 'unknown',
-          },
-        });
-      } catch (e) {
-        const errText = `Error: ${e.message}`;
-        await appendChatMessage(userId, 'assistant', errText);
-        res.status(500).json({ ok: false, error: e.message });
-      }
+      res.json(await getAllUsersMonthlyTokenUsage(month));
     } catch (e) {
-      res.status(500).json({ ok: false, error: e.message });
+      res.status(500).json({ error: e.message });
     }
   });
 

@@ -1,7 +1,10 @@
 node_modules/
+**/.next/
 .env
 *.log
 .DS_Store
+.ai
+.idea
 
 # llama.cpp / CUDA binaries are too large for GitHub; copy locally (see engine/README.txt)
 engine/*.dll

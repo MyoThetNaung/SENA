@@ -302,7 +302,7 @@ async function addManyCalendarEvents(userId, fullText, events) {
 async function runWebSearch(userId, query) {
   if (!getConfig().webSearchEnabled) {
     try {
-      const reply = await chat(await buildMessages(userId, query), { timeoutMs: 120000 });
+      const reply = await chat(await buildMessages(userId, query), { timeoutMs: 120000, soulUserId: userId });
       return { reply: reply || '(empty model response)' };
     } catch (e) {
       logger.error(`Chat error: ${e.message}`);
@@ -654,7 +654,10 @@ export async function handleTextMessage(userId, text) {
       const reply = await handleNotebook(userId, trimmed);
       if (reply == null) {
         try {
-          const chatReply = await chat(await buildMessages(userId, trimmed, { includeRecords: true }), { timeoutMs: 120000 });
+          const chatReply = await chat(await buildMessages(userId, trimmed, { includeRecords: true }), {
+            timeoutMs: 120000,
+            soulUserId: userId,
+          });
           return { reply: chatReply || '(empty model response)' };
         } catch (e) {
           logger.error(`Chat error (notebook→chat): ${e.message}`);
@@ -669,7 +672,10 @@ export async function handleTextMessage(userId, text) {
   }
 
   try {
-    const reply = await chat(await buildMessages(userId, trimmed, { includeRecords: false }), { timeoutMs: 120000 });
+    const reply = await chat(await buildMessages(userId, trimmed, { includeRecords: false }), {
+      timeoutMs: 120000,
+      soulUserId: userId,
+    });
     return { reply: reply || '(empty model response)' };
   } catch (e) {
     logger.error(`Chat error: ${e.message}`);
@@ -693,6 +699,7 @@ export async function handleImageMessage(userId, text, imageDataUrl) {
   try {
     const reply = await chat(await buildMessagesWithImage(userId, text, img, { includeRecords: false }), {
       timeoutMs: 120000,
+      soulUserId: userId,
     });
     return { reply: reply || '(empty model response)' };
   } catch (e) {
@@ -702,7 +709,7 @@ export async function handleImageMessage(userId, text, imageDataUrl) {
       return {
         reply:
           'Model error: image input is not enabled on the running llama-server instance. ' +
-          'Place `mmproj*.gguf` in your models folder, then restart llama-server from the Control Panel (Stop server -> Start server) and retry.',
+          'Configure a vision-capable model on your llama.cpp server (mmproj loaded there), then retry.',
       };
     }
     return { reply: `Model error: ${msg}` };

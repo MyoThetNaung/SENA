@@ -1,29 +1,84 @@
 import { createBot } from '../bot/telegram.js';
 import { assertBotConfigReady, getConfig, reloadConfig } from '../config.js';
 import { getPool } from '../db.js';
-import {
-  startLlamaServerIfConfigured,
-  stopLlamaServerIfWeStarted,
-  ensureLlamaServerReachable,
-} from '../llm/llamaProcess.js';
+import { ensureLlmBackendReachable } from '../llm/llamaProcess.js';
 import { logger } from '../logger.js';
 
+/** @type {{ token: string, bot: import('node-telegram-bot-api') }[]} */
 let botInstances = [];
 let starting = false;
 
-export function getBotStatus() {
+function configuredTokens() {
   reloadConfig();
-  const configuredBotCount = Array.isArray(getConfig().telegramBotTokens)
-    ? getConfig().telegramBotTokens.length
-    : 0;
+  return Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+}
+
+function tokensInSync(tokens, running) {
+  if (tokens.length !== running.length) return false;
+  const live = new Set(running.map((e) => e.token));
+  return tokens.every((t) => live.has(t));
+}
+
+export function getBotStatus() {
+  const tokens = configuredTokens();
   const runningBotCount = botInstances.length;
   return {
     running: runningBotCount > 0,
     starting,
     botCount: runningBotCount,
-    configuredBotCount,
-    needsRestart: runningBotCount > 0 && runningBotCount !== configuredBotCount,
+    configuredBotCount: tokens.length,
+    needsRestart: runningBotCount > 0 && !tokensInSync(tokens, botInstances),
   };
+}
+
+/**
+ * Start bots for newly saved tokens and stop bots whose tokens were removed.
+ */
+export async function syncBotsWithConfig() {
+  reloadConfig();
+  const tokens = configuredTokens();
+
+  const configuredSet = new Set(tokens);
+  const next = [];
+  let stopped = 0;
+  for (const entry of botInstances) {
+    if (configuredSet.has(entry.token)) {
+      next.push(entry);
+      continue;
+    }
+    try {
+      await entry.bot.stopPolling({ cancel: true });
+    } catch {
+      /* ignore */
+    }
+    stopped += 1;
+    logger.info('Telegram bot stopped (token removed from settings)');
+  }
+  botInstances = next;
+
+  const runningTokens = new Set(botInstances.map((e) => e.token));
+  let started = 0;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (runningTokens.has(token)) continue;
+    const bot = await createBot(token, i);
+    botInstances.push({ token, bot });
+    started += 1;
+    logger.info(`Telegram bot started for newly configured token (slot ${i + 1})`);
+  }
+
+  return {
+    ok: true,
+    botCount: botInstances.length,
+    configuredBotCount: tokens.length,
+    started,
+    stopped,
+  };
+}
+
+async function ensureLlmReadyForBots() {
+  await getPool();
+  return ensureLlmBackendReachable();
 }
 
 export async function startBotFromGui() {
@@ -34,45 +89,33 @@ export async function startBotFromGui() {
   try {
     reloadConfig();
     assertBotConfigReady();
-    const tokens = getConfig().telegramBotTokens || [];
-    if (botInstances.length > 0) {
-      if (botInstances.length === tokens.length) {
-        return {
-          ok: false,
-          error: 'All configured bots are already running. Stop the bot, add tokens, then start again.',
-        };
-      }
-      logger.info('Bot token list changed — restarting all Telegram bots…');
-      await stopBotFromGui();
+    const tokens = configuredTokens();
+    if (!tokens.length) {
+      return { ok: false, error: 'No Telegram bot token configured.' };
     }
-    await getPool();
-    const llama = await startLlamaServerIfConfigured(true);
-    if (!llama.ok) {
-      return { ok: false, error: llama.error || 'Could not start llama-server' };
+
+    const llm = await ensureLlmReadyForBots();
+    if (!llm.ok) return llm;
+
+    const before = botInstances.length;
+    const out = await syncBotsWithConfig();
+    if (out.botCount > 0 && before === out.botCount && out.started === 0 && out.stopped === 0) {
+      return {
+        ...out,
+        alreadyRunning: true,
+      };
     }
-    const reach = await ensureLlamaServerReachable();
-    if (!reach.ok) {
-      await stopLlamaServerIfWeStarted().catch(() => {});
-      return { ok: false, error: reach.error || 'llama-server unreachable' };
-    }
-    const created = [];
-    for (let i = 0; i < tokens.length; i += 1) {
-      const bot = await createBot(tokens[i], i);
-      created.push(bot);
-    }
-    botInstances = created;
-    return { ok: true, botCount: botInstances.length, configuredBotCount: tokens.length };
+    return out;
   } catch (e) {
     logger.error(`GUI start bot: ${e.message}`);
-    for (const b of botInstances) {
+    for (const entry of botInstances) {
       try {
-        await b.stopPolling({ cancel: true });
+        await entry.bot.stopPolling({ cancel: true });
       } catch {
         /* ignore */
       }
     }
     botInstances = [];
-    await stopLlamaServerIfWeStarted().catch(() => {});
     return { ok: false, error: e.message || String(e) };
   } finally {
     starting = false;
@@ -85,16 +128,38 @@ export async function stopBotFromGui() {
   }
   try {
     const running = [...botInstances];
-    for (const b of running) {
-      await b.stopPolling({ cancel: true });
+    for (const entry of running) {
+      await entry.bot.stopPolling({ cancel: true });
     }
     botInstances = [];
-    await stopLlamaServerIfWeStarted();
     logger.info('Telegram polling stopped (GUI, all bots)');
     return { ok: true, botCount: 0 };
   } catch (e) {
     logger.error(`stopPolling: ${e.message}`);
     botInstances = [];
     return { ok: false, error: e.message || String(e) };
+  }
+}
+
+/**
+ * Apply token list changes while bots are already running (add/remove without full stop).
+ */
+export async function applyTelegramTokenListChange() {
+  if (starting) {
+    return { ok: false, error: 'Bot is starting; try again in a moment.' };
+  }
+  if (!botInstances.length) {
+    return { ok: true, skipped: true };
+  }
+  starting = true;
+  try {
+    const llm = await ensureLlmBackendReachable();
+    if (!llm.ok) return llm;
+    return await syncBotsWithConfig();
+  } catch (e) {
+    logger.error(`Token list sync: ${e.message}`);
+    return { ok: false, error: e.message || String(e) };
+  } finally {
+    starting = false;
   }
 }

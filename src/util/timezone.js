@@ -22,6 +22,7 @@ export function listCommonTimezones() {
   return [
     'UTC',
     'Asia/Yangon',
+    'Asia/Rangoon',
     'Asia/Bangkok',
     'Asia/Singapore',
     'Asia/Hong_Kong',

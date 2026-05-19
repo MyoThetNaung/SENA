@@ -1,10 +1,10 @@
-import { getConfig, isLlamaServerRemote } from '../config.js';
+import { getConfig } from '../config.js';
 import { fetchLlamaServer, llamaServerAuthHeaders } from './llamaServerClient.js';
 import { getBotIdForScopedUserId } from '../access/telegramAccess.js';
 import { getSoul } from '../memory/soul.js';
 import { explainFetchError } from './fetchUtil.js';
 import { logger } from '../logger.js';
-import { startLlamaServerIfConfigured, ensureLlamaServerReachable } from './llamaProcess.js';
+import { ensureLlamaServerReachable } from './llamaProcess.js';
 import { recordLlmUsage } from './tokenUsage.js';
 import { getCalendarClockContext } from '../calendar/resolveStartsAt.js';
 import { sanitizeChatCompletionText, CHAT_TEMPLATE_STOP_SEQUENCES } from './sanitizeCompletion.js';
@@ -291,6 +291,10 @@ async function llamaServerChatWithUsage(messages, options = {}) {
 export async function chat(messages, options = {}) {
   const model = activeModel(options);
   const provider = getConfig().llmProvider;
+  const soulUserId =
+    options.soulUserId != null && Number.isFinite(Number(options.soulUserId))
+      ? Number(options.soulUserId)
+      : null;
 
   if (provider === 'openai') {
     const r = await openaiChatWithUsage(messages, options);
@@ -300,6 +304,7 @@ export async function chat(messages, options = {}) {
       promptTokens: r.promptTokens,
       completionTokens: r.completionTokens,
       durationMs: r.durationMs,
+      soulUserId,
     });
     return r.text;
   }
@@ -311,6 +316,7 @@ export async function chat(messages, options = {}) {
       promptTokens: r.promptTokens,
       completionTokens: r.completionTokens,
       durationMs: r.durationMs,
+      soulUserId,
     });
     return r.text;
   }
@@ -322,23 +328,14 @@ export async function chat(messages, options = {}) {
       promptTokens: r.promptTokens,
       completionTokens: r.completionTokens,
       durationMs: r.durationMs,
+      soulUserId,
     });
     return r.text;
   }
 
   if (provider === 'llama-server') {
-    if (!isLlamaServerRemote()) {
-      const llama = await startLlamaServerIfConfigured(true);
-      if (!llama.ok) {
-        throw new Error(
-          llama.error ||
-            'llama-server could not start or switch to the GGUF for the active model. Save settings, then try again.'
-        );
-      }
-    } else {
-      const reach = await ensureLlamaServerReachable();
-      if (!reach.ok) throw new Error(reach.error);
-    }
+    const reach = await ensureLlamaServerReachable();
+    if (!reach.ok) throw new Error(reach.error);
     const r = await llamaServerChatWithUsage(messages, options);
     void recordLlmUsage({
       provider: 'llama-server',
@@ -346,6 +343,7 @@ export async function chat(messages, options = {}) {
       promptTokens: r.promptTokens,
       completionTokens: r.completionTokens,
       durationMs: r.durationMs,
+      soulUserId,
     });
     return r.text;
   }
@@ -375,6 +373,7 @@ export async function chat(messages, options = {}) {
     promptTokens,
     completionTokens,
     durationMs,
+    soulUserId,
   });
   const text = data?.message?.content;
   if (typeof text !== 'string') {
@@ -396,18 +395,8 @@ export async function* chatStream(messages, options = {}) {
   const stop = Array.isArray(options.stop) && options.stop.length ? options.stop : CHAT_TEMPLATE_STOP_SEQUENCES;
 
   if (provider === 'llama-server') {
-    if (!isLlamaServerRemote()) {
-      const llama = await startLlamaServerIfConfigured(true);
-      if (!llama.ok) {
-        throw new Error(
-          llama.error ||
-            'llama-server could not start or switch to the GGUF for the active model. Save settings, then try again.'
-        );
-      }
-    } else {
-      const reach = await ensureLlamaServerReachable();
-      if (!reach.ok) throw new Error(reach.error);
-    }
+    const reach = await ensureLlamaServerReachable();
+    if (!reach.ok) throw new Error(reach.error);
     yield* llamaServerChatStream(messages, { ...options, model, timeoutMs, stop });
     return;
   }

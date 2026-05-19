@@ -1,5 +1,5 @@
 import { query } from '../db.js';
-import { ensureSoul } from '../memory/soul.js';
+import { ensureSoul, ensureDefaultUserTimezone } from '../memory/soul.js';
 import { logger } from '../logger.js';
 import {
   normalizeGoogleEmail,
@@ -107,6 +107,7 @@ export async function activateGoogleAllowlistUser(row, googleUser) {
     String(googleUser.name || '').trim() || email || 'Google user';
 
   await ensureSoul(soulUserId);
+  await ensureDefaultUserTimezone(soulUserId);
   await query(
     `UPDATE soul SET display_name = COALESCE($1, display_name), updated_at = timezone('utc', now())
      WHERE user_id = $2`,
@@ -153,6 +154,7 @@ export async function activateAllowlistUser(row, telegramUser, soulUserIdOverrid
     String(telegramUser.first_name || '').trim() || username || String(tid);
 
   await ensureSoul(soulUserId);
+  await ensureDefaultUserTimezone(soulUserId);
   await query(
     `UPDATE soul SET display_name = COALESCE($1, display_name), updated_at = timezone('utc', now())
      WHERE user_id = $2`,
@@ -201,6 +203,20 @@ export async function touchAllowlistSeen(telegramUserId, username) {
       [un]
     );
   }
+}
+
+/** Allowlist row for a logged-in web user (soul user id). */
+export async function getAllowlistBySoulUserId(soulUserId) {
+  const uid = Number(soulUserId);
+  if (!Number.isFinite(uid)) return null;
+  const r = await query(
+    `SELECT id, username, telegram_user_id, email, google_sub, soul_user_id, status, notes, invited_at, first_login_at, last_seen
+     FROM telegram_allowlist WHERE soul_user_id = $1
+     ORDER BY last_seen DESC NULLS LAST
+     LIMIT 1`,
+    [uid]
+  );
+  return r.rows[0] || null;
 }
 
 export async function listAllowlist() {

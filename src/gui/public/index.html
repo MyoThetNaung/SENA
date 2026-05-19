@@ -527,89 +527,38 @@
               <input type="text" id="ollamaBaseUrl" />
             </div>
             <div id="wrapLlama" class="hidden">
-              <label>llama.cpp connection</label>
-              <select id="llamaServerMode">
-                <option value="local">Local — embedded llama-server on this machine</option>
-                <option value="remote">Remote / online — existing llama.cpp server URL</option>
-              </select>
-              <label>Server base URL</label>
+              <label>llama.cpp server base URL</label>
               <input
                 type="text"
                 id="llamaServerUrl"
                 placeholder="http://127.0.0.1:8080 or https://your-host.example.com"
               />
-              <div id="wrapLlamaRemoteAuth" class="hidden">
-                <label>API key (optional)</label>
+              <p class="hint">Start your llama.cpp server separately, then set its HTTP base URL here.</p>
+              <label>API key (optional)</label>
                 <input
                   type="password"
                   id="llamaServerApiKey"
                   autocomplete="off"
                   placeholder="Bearer token if your host requires auth"
                 />
-                <p class="hint" id="llamaServerApiKeyHint"></p>
-              </div>
-              <div id="wrapLlamaRemoteModels" class="hidden">
-                <label>Active model (from server)</label>
+              <p class="hint" id="llamaServerApiKeyHint"></p>
+              <label>Active model (from server)</label>
                 <div class="row">
                   <select id="llmModelRemote" class="llm-model-select"></select>
                   <button type="button" id="btnRefreshRemoteModels" class="primary ghost">Refresh</button>
                 </div>
-                <p class="hint" id="llamaRemoteModelsHint">
-                  Models are loaded from the remote server <code>/v1/models</code> endpoint.
-                </p>
-              </div>
+              <p class="hint" id="llamaRemoteModelsHint">
+                Models are loaded from your server <code>/v1/models</code> endpoint.
+              </p>
             </div>
             <div id="localLlmActions" class="row">
               <button type="button" id="btnTestLocalLlm" class="primary ghost">Test Connection</button>
-              <button type="button" id="btnStartEmbeddedServer" class="primary ghost hidden">Start Embedded Server</button>
             </div>
             <p id="localLlmTestHint" class="hint">
-              For local backends, test the current base URL before saving.
+              For Ollama or llama.cpp, test the base URL before saving.
             </p>
 
-            <div id="wrapLlamaLocalModels">
-              <div class="embedded-server-panel" id="embeddedServerPanel">
-                <div class="embedded-status-row">
-                  <span class="embedded-status-label">Embedded llama-server</span>
-                  <span
-                    id="embeddedServerStatusBadge"
-                    class="embedded-status-badge embedded-status--offline"
-                    role="status"
-                    >Offline</span>
-                </div>
-                <p class="hint embedded-status-hint" id="embeddedServerStatusDetail"></p>
-              </div>
-              <label>Main model (.gguf) — full file path</label>
-              <div class="row">
-                <button type="button" id="btnPickGgufFile" class="primary ghost">Choose file…</button>
-              </div>
-              <input
-                type="text"
-                class="mono-path-readout"
-                id="displayMainModelPath"
-                value=""
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="/absolute/path/to/model.gguf — use Choose file… or paste a path"
-                title="Full path to the main GGUF weights (editable)"
-              />
-              <p class="hint" id="selectedGgufLabel">No local model file selected yet.</p>
-              <label>Multimodal projector (optional — .mmproj or mmproj .gguf) — full file path</label>
-              <div class="row">
-                <button type="button" id="btnPickMmprojFile" class="primary ghost">Choose file…</button>
-                <button type="button" id="btnClearMmproj" class="primary ghost">Clear</button>
-              </div>
-              <input
-                type="text"
-                class="mono-path-readout"
-                id="displayMmprojPath"
-                value=""
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="/absolute/path/to/mmproj.mmproj — optional, for vision models"
-                title="Full path to the vision projector file (editable)"
-              />
-              <p class="hint" id="selectedMmprojLabel">None — add an mmproj .gguf for multimodal (images).</p>
+            <div id="wrapLlamaLocalModels" class="hidden" aria-hidden="true">
               <select id="llmModel" hidden></select>
               <input type="hidden" id="modelsDir" />
               <input type="hidden" id="ggufPath" />

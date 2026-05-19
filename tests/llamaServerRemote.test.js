@@ -10,7 +10,7 @@ describe('resolveLlamaServerMode', () => {
   it('migrates legacy llamaServerExternal flag', () => {
     expect(resolveLlamaServerMode({ llamaServerExternal: true })).toBe('remote');
     expect(resolveLlamaServerMode({ llamaServerExternal: 'true' })).toBe('remote');
-    expect(resolveLlamaServerMode({ llamaServerExternal: false })).toBe('local');
+    expect(resolveLlamaServerMode({ llamaServerExternal: false })).toBe('remote');
   });
 });
 

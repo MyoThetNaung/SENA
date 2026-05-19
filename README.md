@@ -5,7 +5,7 @@ Private assistant that runs on your PC: **Telegram** ↔ **Node.js** ↔ **Ollam
 ## Prerequisites
 
 - **Node.js 18+**
-- **llama-server** (recommended): `llama-server.exe` in `engine/` and a `.gguf` in `models/` — use **Start server** in the Control Panel, or **Ollama** instead if you prefer
+- **llama-server** (recommended): run your own llama.cpp HTTP server and set its base URL in the Control Panel, or use **Ollama** instead
 - **Telegram** bot token from [@BotFather](https://t.me/BotFather)
 - New chatters are **approved in the Control Panel** (Access tab), unless you set optional legacy `ALLOWED_USER_IDS` in `.env`.
 
@@ -18,7 +18,7 @@ cd "F:\AI ASSISTANT"
 npm install
 ```
 
-2. If you use **llama-server**, place `llama-server.exe` in `engine/` and a `.gguf` in `models/`, then in the Control Panel click **Save settings** → **Start server**. If you use **Ollama** instead, start it (default API `http://127.0.0.1:11434`).
+2. If you use **llama-server**, start your server (for example `llama-server` on `http://127.0.0.1:8080`), then in the Control Panel set **Server base URL** and click **Save settings**. If you use **Ollama** instead, start it (default API `http://127.0.0.1:11434`).
 
 ### Option A — Control Panel (GUI in your browser) — recommended on Windows
 
@@ -26,7 +26,7 @@ npm install
 npm run gui
 ```
 
-Your browser opens **http://127.0.0.1:3847** (local only). You can set **all main options** there: Telegram, **llama-server** or Ollama, **models folder** (for `.gguf` files), **SQLite path**, logging, web-tool limits, and whether to auto-open the browser. Click **Save settings**, then **Start server** (llama.cpp backend) and **Start bot**. The **Chat session** table shows Telegram conversation history stored locally.
+Your browser opens **http://127.0.0.1:3847** (local only). You can set **all main options** there: Telegram, **llama-server** URL or Ollama, logging, web-tool limits, and whether to auto-open the browser. Click **Save settings**, then turn on **AI assistance** (Telegram bot). The **Chat session** table shows Telegram conversation history stored locally.
 
 - **GGUF files**: default folder is `models/` (configurable). Ollama still needs a `Modelfile` / `ollama create` step — see `models/README.txt`.
 - Change the panel port in the form or set `GUI_PORT` in `.env`; **restart** the app after changing the port.

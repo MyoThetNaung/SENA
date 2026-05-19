@@ -237,8 +237,7 @@ export async function buildModelCatalog(opts = {}) {
       combined.push({ id: m, source: 'remote', label: m });
     }
   }
-  const includeGguf =
-    llmProvider === 'ollama' || (llmProvider === 'llama-server' && !isLlamaServerRemote(effective));
+  const includeGguf = llmProvider === 'ollama';
   if (includeGguf) {
     for (const g of gguf) {
       if (!seen.has(g.id)) {

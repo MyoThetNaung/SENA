@@ -165,9 +165,6 @@ function buildConfig() {
       : settings.openBrowser === true
         ? true
         : process.env.OPEN_BROWSER !== '0';
-  const autoStartLlamaServer =
-    settings.autoStartLlamaServer === true || process.env.AUTO_START_LLAMA_SERVER === '1';
-
   const rawPersona = settings.botPersona && typeof settings.botPersona === 'object' ? settings.botPersona : {};
   const rawPersonaByBotId =
     settings.botPersonaByBotId && typeof settings.botPersonaByBotId === 'object'
@@ -238,7 +235,6 @@ function buildConfig() {
     ggufPath,
     mmprojPath,
     openBrowserGui,
-    autoStartLlamaServer,
     botPersona,
     botPersonaByBotId,
     memoryBotNamesById,
@@ -299,7 +295,7 @@ export function resolveLlamaServerMode(settings = {}, env = process.env) {
   if (settings.llamaServerExternal === true || settings.llamaServerExternal === 'true') {
     return 'remote';
   }
-  return 'local';
+  return 'remote';
 }
 
 /** True when llama.cpp server runs on a remote host (no local binary / GGUF spawn). */

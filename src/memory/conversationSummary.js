@@ -38,7 +38,7 @@ export async function refreshConversationMemorySummary(userId) {
       { role: 'system', content: system },
       { role: 'user', content: userMsg },
     ],
-    { temperature: 0.15, timeoutMs: 120000 }
+    { temperature: 0.15, timeoutMs: 120000, soulUserId: userId }
   );
   const text = String(out || '')
     .trim()

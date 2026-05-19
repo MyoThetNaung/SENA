@@ -6,7 +6,7 @@
   "type": "module",
   "main": "src/gui-main.js",
   "scripts": {
-    "postinstall": "node scripts/rebuild-native.js",
+    "postinstall": "node scripts/rebuild-native.js && npm install --prefix web",
     "prestart": "node scripts/rebuild-native.js",
     "start": "node src/index.js",
     "gui": "node src/gui-main.js",
@@ -23,16 +23,13 @@
     "format:check": "prettier --check \"src/**/*.js\" \"scripts/**/*.js\""
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.9"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "next": "^15.1.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "node-telegram-bot-api": "^0.66.0",
     "pg": "^8.13.1",
     "puppeteer": "^23.6.0",

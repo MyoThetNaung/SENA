@@ -1,109 +1,113 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import Link from 'next/link';
-import { apiFetch, escapeHtml } from '../../lib/api.js';
+import { useEffect, useState } from 'react';
+import { apiFetch } from '@/lib/api.js';
+import { PageSection } from '@/components/page-section';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
-export default function UserAppPage() {
-  const [messages, setMessages] = useState([]);
-  const [text, setText] = useState('');
-  const [error, setError] = useState('');
-  const [sending, setSending] = useState(false);
-  const logRef = useRef(null);
-
-  async function loadChat() {
-    const data = await apiFetch('/api/user/chat?limit=100').then((r) => r.json());
-    if (data.error) throw new Error(data.error);
-    setMessages(data.messages || []);
-  }
+export default function UserOverviewPage() {
+  const [data, setData] = useState(null);
+  const [clock, setClock] = useState('');
+  const [tz, setTz] = useState('Asia/Rangoon');
+  const [usageMonth, setUsageMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   useEffect(() => {
-    (async () => {
-      const me = await apiFetch('/api/auth/me').then((r) => r.json());
-      if (!me.authenticated || me.role !== 'user') {
-        window.location.href = '/login';
-        return;
-      }
+    apiFetch(`/api/user/overview?month=${encodeURIComponent(usageMonth)}`)
+      .then((r) => r.json())
+      .then((o) => {
+        if (o.error) throw new Error(o.error);
+        setData(o);
+        setTz(o.timezone || 'Asia/Rangoon');
+      })
+      .catch(() => {});
+  }, [usageMonth]);
+
+  useEffect(() => {
+    const tick = () => {
       try {
-        await loadChat();
-      } catch (e) {
-        setError(e.message || String(e));
+        setClock(
+          new Date().toLocaleString('en-US', {
+            timeZone: tz,
+            weekday: 'short',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        );
+      } catch {
+        setClock(new Date().toLocaleString());
       }
-    })();
-  }, []);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [tz]);
 
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [messages]);
-
-  async function send(ev) {
-    ev.preventDefault();
-    const msg = text.trim();
-    if (!msg || sending) return;
-    setSending(true);
-    setError('');
-    setText('');
-    try {
-      const r = await apiFetch('/api/user/chat/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: msg }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Send failed');
-      await loadChat();
-    } catch (e) {
-      setError(e.message || String(e));
-      setText(msg);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function logout() {
-    await apiFetch('/api/auth/logout', { method: 'POST' });
-    window.location.href = '/login';
-  }
+  const running = Boolean(data?.bot?.running);
 
   return (
-    <div className="user-chat-wrap card">
-      <h1>SENA</h1>
-      <p className="auth-lead">Your conversation</p>
-      <div className="user-chat-log" ref={logRef}>
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`user-chat-row ${m.role === 'user' ? 'user' : 'assistant'}`}
-          >
-            <span className="chat-role">{m.role === 'user' ? 'You' : 'SENA'}</span>
-            <div
-              className="chat-text"
-              dangerouslySetInnerHTML={{ __html: escapeHtml(m.content || '') }}
-            />
+    <PageSection title="Overview">
+      <div className="overview-status-grid user-overview-grid">
+        <div className="status-card">
+          <div className="status-card-label">I am</div>
+          <div className="status-card-value status-card-value-name">{data?.displayName || '…'}</div>
+        </div>
+        <div className="status-card" id="overviewCardTelegram">
+          <div className="status-card-head">
+            <span className="status-card-label">AI assistance</span>
+            <span className={`status-led${running ? ' is-live' : ' is-idle'}`} aria-hidden="true" />
           </div>
-        ))}
+          <div className="status-card-value">{running ? 'Running' : 'Stopped'}</div>
+          <div className="status-card-sub">{data?.telegramLine || '…'}</div>
+        </div>
+        <div className="status-card" id="overviewCardClock">
+          <div className="status-card-label">Panel time</div>
+          <div className="status-card-value overview-clock-line">{clock || '…'}</div>
+          <div className="status-card-sub">{tz}</div>
+        </div>
+        <div className="status-card" style={{ gridColumn: '1 / -1' }}>
+          <div className="status-card-label">Token usage (monthly)</div>
+          <Label htmlFor="usage-month">Month</Label>
+          <Input
+            id="usage-month"
+            type="month"
+            value={usageMonth}
+            onChange={(e) => setUsageMonth(e.target.value)}
+            min="2000-01"
+            max="2100-12"
+            style={{ width: '130px', marginTop: '0.35rem' }}
+          />
+          {data?.tokenUsage ? (
+            <div className="row" style={{ marginTop: '0.75rem', gap: '1.5rem' }}>
+              <div>
+                <div className="hint">Total tokens</div>
+                <div className="status-card-value">{Number(data.tokenUsage.totalTokens || 0).toLocaleString()}</div>
+              </div>
+              <div>
+                <div className="hint">Prompt</div>
+                <div className="status-card-value" style={{ fontSize: '1rem' }}>
+                  {Number(data.tokenUsage.promptTokens || 0).toLocaleString()}
+                </div>
+              </div>
+              <div>
+                <div className="hint">Completion</div>
+                <div className="status-card-value" style={{ fontSize: '1rem' }}>
+                  {Number(data.tokenUsage.completionTokens || 0).toLocaleString()}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="hint" style={{ marginTop: '0.75rem' }}>No usage recorded for this month yet.</p>
+          )}
+        </div>
       </div>
-      <form className="user-chat-form" onSubmit={send}>
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Message…"
-          autoComplete="off"
-          disabled={sending}
-        />
-        <button type="submit" className="btn primary" disabled={sending}>
-          Send
-        </button>
-      </form>
-      <p className="auth-error">{error}</p>
-      <div className="auth-links">
-        <button type="button" className="btn" onClick={logout}>
-          Sign out
-        </button>
-        {' · '}
-        <Link href="/login">Back</Link>
-      </div>
-    </div>
+    </PageSection>
   );
 }

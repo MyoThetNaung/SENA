@@ -58,6 +58,35 @@ export async function getEventsForLocalDate(userId, ymd) {
   return r.rows;
 }
 
+export async function listEventsForUser(userId, limit = 200) {
+  const uid = Number(userId);
+  if (!Number.isFinite(uid)) return [];
+  const lim = Math.min(500, Math.max(1, Number(limit) || 200));
+  const r = await query(
+    `SELECT id, user_id, starts_at, title, created_at FROM events
+     WHERE user_id = $1
+     ORDER BY starts_at DESC
+     LIMIT $2`,
+    [uid, lim]
+  );
+  return r.rows.map((row) => ({
+    id: Number(row.id),
+    user_id: Number(row.user_id),
+    starts_at: toIso(row.starts_at),
+    title: row.title,
+    created_at: toIso(row.created_at),
+  }));
+}
+
+/** @returns {boolean} */
+export async function deleteEventForUser(userId, eventId) {
+  const uid = Number(userId);
+  const eid = Number(eventId);
+  if (!Number.isFinite(uid) || !Number.isFinite(eid)) return false;
+  const r = await query('DELETE FROM events WHERE id = $1 AND user_id = $2', [eid, uid]);
+  return Number(r.rowCount || 0) > 0;
+}
+
 export async function listAllEvents(limit = 300) {
   const lim = Math.min(2000, Math.max(1, Number(limit) || 300));
   const r = await query(
