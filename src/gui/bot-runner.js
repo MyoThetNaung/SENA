@@ -3,14 +3,40 @@ import { assertBotConfigReady, getConfig, reloadConfig } from '../config.js';
 import { getPool } from '../db.js';
 import { ensureLlmBackendReachable } from '../llm/llamaProcess.js';
 import { logger } from '../logger.js';
+import { listAllUserBotTokens } from '../access/userTelegramBots.js';
 
 /** @type {{ token: string, bot: import('node-telegram-bot-api') }[]} */
 let botInstances = [];
 let starting = false;
+/** @type {string[]} */
+let cachedUserBotTokens = [];
+/** @type {{ token: string, ownerSoulUserId: number }[]} */
+let cachedUserBotRows = [];
+
+export async function refreshUserBotTokensCache() {
+  try {
+    await getPool();
+    const rows = await listAllUserBotTokens();
+    cachedUserBotRows = rows
+      .map((r) => ({
+        token: String(r.token || '').trim(),
+        ownerSoulUserId: Number(r.ownerSoulUserId),
+      }))
+      .filter((r) => r.token && Number.isFinite(r.ownerSoulUserId));
+    cachedUserBotTokens = cachedUserBotRows.map((r) => r.token);
+  } catch (e) {
+    logger.warn(`refreshUserBotTokensCache: ${e.message}`);
+    cachedUserBotTokens = [];
+    cachedUserBotRows = [];
+  }
+  return cachedUserBotTokens;
+}
 
 function configuredTokens() {
   reloadConfig();
-  return Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+  const global = Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
+  const merged = [...global, ...cachedUserBotTokens];
+  return [...new Set(merged.map((t) => String(t || '').trim()).filter(Boolean))];
 }
 
 function tokensInSync(tokens, running) {
@@ -20,7 +46,7 @@ function tokensInSync(tokens, running) {
 }
 
 export function getBotStatus() {
-  const tokens = configuredTokens();
+  const tokens = configuredTokens(); // includes cached user tokens when refreshed via sync/start
   const runningBotCount = botInstances.length;
   return {
     running: runningBotCount > 0,
@@ -31,10 +57,29 @@ export function getBotStatus() {
   };
 }
 
+/** Bot status for one portal user (only their Telegram tokens). */
+export function getBotStatusForOwner(ownerSoulUserId) {
+  const owner = Number(ownerSoulUserId);
+  if (!Number.isFinite(owner)) {
+    return { running: false, botCount: 0, configuredBotCount: 0 };
+  }
+  const userTokens = cachedUserBotRows
+    .filter((r) => r.ownerSoulUserId === owner)
+    .map((r) => r.token);
+  const live = new Set(botInstances.map((e) => e.token));
+  const botCount = userTokens.filter((t) => live.has(t)).length;
+  return {
+    running: botCount > 0,
+    botCount,
+    configuredBotCount: userTokens.length,
+  };
+}
+
 /**
  * Start bots for newly saved tokens and stop bots whose tokens were removed.
  */
 export async function syncBotsWithConfig() {
+  await refreshUserBotTokensCache();
   reloadConfig();
   const tokens = configuredTokens();
 
@@ -87,8 +132,8 @@ export async function startBotFromGui() {
   }
   starting = true;
   try {
+    await refreshUserBotTokensCache();
     reloadConfig();
-    assertBotConfigReady();
     const tokens = configuredTokens();
     if (!tokens.length) {
       return { ok: false, error: 'No Telegram bot token configured.' };

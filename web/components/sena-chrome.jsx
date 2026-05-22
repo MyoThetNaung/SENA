@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { initNeuralBackground } from '@/lib/neural-background';
+import { initCustomCursor } from '@/lib/custom-cursor';
 
 export function SenaChrome() {
   useEffect(() => {
@@ -9,5 +10,15 @@ export function SenaChrome() {
     return initNeuralBackground(canvas);
   }, []);
 
-  return <canvas id="network" aria-hidden="true" />;
+  useEffect(() => {
+    initCustomCursor();
+  }, []);
+
+  return (
+    <>
+      <canvas id="network" aria-hidden="true" />
+      <div className="cursor" aria-hidden="true" />
+      <div className="cursor-ring" aria-hidden="true" />
+    </>
+  );
 }

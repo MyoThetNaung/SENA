@@ -1,20 +1,13 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { apiFetch } from '@/lib/api.js';
+import { apiJson } from '@/lib/api.js';
 import { PageSection } from '@/components/page-section';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Table,
   TableBody,
@@ -46,11 +39,23 @@ const EMPTY_PERSONA = {
 
 const AGE_BUCKETS = ['Under 13', '13-17', '18-24', '25-34', '35-44', '45-54', '55-64', '65+'];
 
+const WEB_BOT_KEY = 'web';
+
+function botTabLabel(bot) {
+  if (bot?.isWeb) return 'Web account';
+  const un = bot?.username ? `@${String(bot.username).replace(/^@+/, '')}` : '';
+  return un || `Bot ${bot?.botId ?? '?'}`;
+}
+
 export default function UserMemoryPage() {
   const [activeTab, setActiveTab] = useState('bot');
   const [timezones, setTimezones] = useState([]);
+  const [bots, setBots] = useState([]);
+  const [currentBotKey, setCurrentBotKey] = useState(WEB_BOT_KEY);
   const [sessions, setSessions] = useState([]);
+  const [allSessions, setAllSessions] = useState([]);
   const [sessionUserId, setSessionUserId] = useState(null);
+  const [primaryUserId, setPrimaryUserId] = useState(null);
   const [profile, setProfile] = useState(EMPTY_PROFILE);
   const [persona, setPersona] = useState(EMPTY_PERSONA);
   const [records, setRecords] = useState([]);
@@ -60,14 +65,48 @@ export default function UserMemoryPage() {
   const [copyFromPersona, setCopyFromPersona] = useState('');
 
   async function loadTimezones() {
-    const r = await apiFetch('/api/user/timezones').then((x) => x.json());
+    const r = await apiJson('/api/user/timezones');
     setTimezones(r.timezones || []);
   }
 
-  async function loadMemory(targetId) {
-    const qs = targetId != null ? `?sessionUserId=${encodeURIComponent(targetId)}` : '';
-    const r = await apiFetch(`/api/user/memory${qs}`).then((x) => x.json());
-    if (r.error) throw new Error(r.error);
+  function memoryQuery(targetId, botKey) {
+    const params = new URLSearchParams();
+    if (targetId != null && targetId !== '') {
+      params.set('sessionUserId', String(targetId));
+    }
+    if (botKey && botKey !== WEB_BOT_KEY) {
+      params.set('botId', String(botKey));
+    }
+    const q = params.toString();
+    return q ? `?${q}` : '';
+  }
+
+  async function loadBots() {
+    const r = await apiJson('/api/user/memory/bots');
+    setPrimaryUserId(r.primaryUserId ?? null);
+    const telegramBots = Array.isArray(r.bots) ? r.bots : [];
+    setBots([{ isWeb: true, botId: null }, ...telegramBots]);
+  }
+
+  async function loadSessionsForBot(botKey) {
+    const q =
+      botKey && botKey !== WEB_BOT_KEY
+        ? `?botId=${encodeURIComponent(botKey)}`
+        : '?botId=web';
+    const r = await apiJson(`/api/user/memory/sessions${q}`);
+    const list = r.sessions || [];
+    setSessions(list);
+    return list;
+  }
+
+  async function loadAllSessions() {
+    const r = await apiJson('/api/user/sessions');
+    setAllSessions(r.sessions || []);
+    return r.sessions || [];
+  }
+
+  async function loadMemory(targetId, botKey) {
+    const r = await apiJson(`/api/user/memory${memoryQuery(targetId, botKey)}`);
     const soul = r.soul || {};
     const prof = soul.preferences?.profile || {};
     setProfile({
@@ -90,20 +129,29 @@ export default function UserMemoryPage() {
       role: bp.role || '',
     });
     setRecords(r.records || []);
-    setSessions(r.sessions || []);
     setSessionUserId(r.sessionUserId ?? null);
+    if (r.primaryUserId != null) setPrimaryUserId(r.primaryUserId);
   }
 
-  async function loadSouls() {
-    const r = await apiFetch('/api/user/souls').then((x) => x.json());
-    if (r.error) throw new Error(r.error);
+  async function loadSouls(botKey) {
+    const q =
+      botKey && botKey !== WEB_BOT_KEY
+        ? `?botId=${encodeURIComponent(botKey)}`
+        : '';
+    const r = await apiJson(`/api/user/souls${q}`);
     setSouls(r.souls || []);
   }
 
-  async function refresh(targetId) {
+  async function refresh(targetId, botKey = currentBotKey) {
     setStatus('');
     try {
-      await Promise.all([loadMemory(targetId), loadSouls()]);
+      const list = await loadSessionsForBot(botKey);
+      const pick =
+        targetId != null && list.some((s) => s.userId === Number(targetId))
+          ? Number(targetId)
+          : list[0]?.userId ?? primaryUserId;
+      await Promise.all([loadMemory(pick, botKey), loadSouls(botKey), loadAllSessions()]);
+      setSessionUserId(pick ?? null);
     } catch (e) {
       setStatus(e.message);
     }
@@ -111,110 +159,185 @@ export default function UserMemoryPage() {
 
   useEffect(() => {
     loadTimezones().catch((e) => setStatus(e.message));
-    refresh().catch((e) => setStatus(e.message));
+    loadBots()
+      .then(() => refresh(null, WEB_BOT_KEY))
+      .catch((e) => setStatus(e.message));
   }, []);
+
+  function switchBot(botKey) {
+    if (botKey === currentBotKey) return;
+    setCurrentBotKey(botKey);
+    setCopyFrom('');
+    setCopyFromPersona('');
+    refresh(null, botKey).catch((e) => setStatus(e.message));
+  }
 
   function switchSession(nextId) {
     const n = Number(nextId);
     if (!Number.isFinite(n) || n === sessionUserId) return;
-    refresh(n).catch((e) => setStatus(e.message));
+    setStatus('');
+    loadMemory(n, currentBotKey)
+      .then(() => loadSouls(currentBotKey))
+      .catch((e) => setStatus(e.message));
   }
 
   async function saveProfile() {
     setStatus('Saving…');
-    const r = await apiFetch(
-      `/api/user/memory?sessionUserId=${encodeURIComponent(sessionUserId ?? '')}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          display_name: profile.display_name,
-          profile: {
-            timezone: profile.timezone,
-            gender: profile.gender,
-            age: profile.age,
-            addressUserEn: profile.addressUserEn,
-            addressUserMy: profile.addressUserMy,
-            whoAmI: profile.whoAmI,
-            extra: profile.extra,
-            memorySummary: profile.memorySummary,
-          },
-        }),
-      }
-    );
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Save failed');
+    await apiJson(`/api/user/memory${memoryQuery(sessionUserId, currentBotKey)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        display_name: profile.display_name,
+        profile: {
+          timezone: profile.timezone,
+          gender: profile.gender,
+          age: profile.age,
+          addressUserEn: profile.addressUserEn,
+          addressUserMy: profile.addressUserMy,
+          whoAmI: profile.whoAmI,
+          extra: profile.extra,
+          memorySummary: profile.memorySummary,
+        },
+      }),
+    });
     setStatus('Saved.');
-    await refresh(sessionUserId);
+    await refresh(sessionUserId, currentBotKey);
   }
 
   async function savePersona() {
     setStatus('Saving…');
-    const r = await apiFetch(
-      `/api/user/memory?sessionUserId=${encodeURIComponent(sessionUserId ?? '')}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botPersona: persona }),
-      }
-    );
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Save failed');
+    await apiJson(`/api/user/memory${memoryQuery(sessionUserId, currentBotKey)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ botPersona: persona }),
+    });
     setStatus('Saved.');
-    await refresh(sessionUserId);
+    await refresh(sessionUserId, currentBotKey);
   }
 
   async function copyProfileFrom() {
-    if (!copyFrom) return;
+    if (!copyFrom || sessionUserId == null) return;
+    const from = Number(copyFrom);
+    const to = Number(sessionUserId);
+    if (!Number.isFinite(from) || from === to) return;
+    if (
+      !confirm(
+        `Copy memory from session ${from} into ${to}? Existing memory for this session will be replaced.`
+      )
+    ) {
+      return;
+    }
     setStatus('Copying…');
-    const r = await apiFetch('/api/user/memory/copy', {
+    await apiJson('/api/user/memory/copy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fromUserId: Number(copyFrom), toUserId: sessionUserId }),
     });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Copy failed');
     setStatus('Copied.');
-    await refresh(sessionUserId);
+    await refresh(sessionUserId, currentBotKey);
+  }
+
+  async function removeRecord(recordId) {
+    if (sessionUserId == null) return;
+    const id = Number(recordId);
+    if (!Number.isFinite(id)) return;
+    if (!confirm(`Delete saved table row #${id}?`)) return;
+    setStatus('Deleting…');
+    const params = new URLSearchParams({ sessionUserId: String(sessionUserId) });
+    if (currentBotKey && currentBotKey !== WEB_BOT_KEY) {
+      params.set('botId', String(currentBotKey));
+    }
+    await apiJson(`/api/user/memory/records/delete?${params}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionUserId, id }),
+    });
+    setStatus('Row deleted.');
+    const mem = await apiJson(`/api/user/memory${memoryQuery(sessionUserId, currentBotKey)}`);
+    setRecords(mem.records || []);
   }
 
   async function copyPersonaFrom() {
-    if (!copyFromPersona) return;
+    if (!copyFromPersona || sessionUserId == null) return;
+    const from = Number(copyFromPersona);
+    const to = Number(sessionUserId);
+    if (!Number.isFinite(from) || from === to) return;
+    if (
+      !confirm(
+        `Copy assistant identity from session ${from} into ${to}? Existing identity for this session will be replaced.`
+      )
+    ) {
+      return;
+    }
     setStatus('Copying…');
-    const r = await apiFetch('/api/user/memory/copy-bot-persona', {
+    await apiJson('/api/user/memory/copy-bot-persona', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fromUserId: Number(copyFromPersona), toUserId: sessionUserId }),
     });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'Copy failed');
     setStatus('Copied.');
-    await refresh(sessionUserId);
+    await refresh(sessionUserId, currentBotKey);
   }
 
   const otherSessions = useMemo(
-    () => sessions.filter((s) => s.userId !== sessionUserId),
-    [sessions, sessionUserId]
+    () => allSessions.filter((s) => s.userId !== sessionUserId),
+    [allSessions, sessionUserId]
   );
 
+  const onlyWebBot = bots.length <= 1 && bots[0]?.isWeb;
+
   return (
-    <PageSection title="Memory & bot persona">
+    <PageSection title="Memory & bot persona" neuralBgId="neuralBgToggleData">
       <div className="toolbar mem-toolbar mem-toolbar-session">
         <div className="mem-toolbar-grid">
-          <div className="session-select-wrap">
+          <div className="mem-bot-select-wrap">
+            <div className="session-select-row">
+              <Label htmlFor="memBotSelect">Bot</Label>
+              <select
+                id="memBotSelect"
+                className="sena-field chat-session-select"
+                value={currentBotKey}
+                onChange={(e) => switchBot(e.target.value)}
+                aria-label="Select bot"
+              >
+                {bots.map((b) => {
+                  const key = b.isWeb ? WEB_BOT_KEY : String(b.botId);
+                  return (
+                    <option key={key} value={key}>
+                      {botTabLabel(b)}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            {onlyWebBot ? (
+              <p className="hint text-sm" style={{ marginTop: '0.35rem' }}>
+                Connect your bot token on the Telegram tab to see bot sessions here.
+              </p>
+            ) : null}
+          </div>
+          <div className="mem-bot-select-wrap">
             <div className="session-select-row">
               <Label htmlFor="memSessionSelect">Session</Label>
               <select
                 id="memSessionSelect"
-                className="chat-session-select"
+                className="sena-field chat-session-select"
                 value={sessionUserId ?? ''}
                 onChange={(e) => switchSession(e.target.value)}
               >
-                {sessions.map((s) => (
-                  <option key={s.userId} value={s.userId}>
-                    {s.label}
+                {sessions.length === 0 ? (
+                  <option value="">
+                    {currentBotKey === WEB_BOT_KEY
+                      ? 'Web account'
+                      : 'No Telegram sessions yet — approve users and chat on the bot'}
                   </option>
-                ))}
+                ) : (
+                  sessions.map((s) => (
+                    <option key={s.userId} value={s.userId}>
+                      {s.label}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
@@ -280,7 +403,7 @@ export default function UserMemoryPage() {
                   <Label>Bot display name</Label>
                   <Input
                     value={persona.displayName}
-                    placeholder="e.g. AI_AGENT_NG2"
+                    placeholder="e.g. SENA"
                     onChange={(e) =>
                       setPersona((p) => ({ ...p, displayName: e.target.value }))
                     }
@@ -298,21 +421,15 @@ export default function UserMemoryPage() {
                 </div>
                 <div>
                   <Label>Bot gender (persona)</Label>
-                  <Select
-                    value={persona.gender || '__none'}
-                    onValueChange={(v) =>
-                      setPersona((p) => ({ ...p, gender: v === '__none' ? '' : v }))
-                    }
+                  <select
+                    className="sena-field"
+                    value={persona.gender || ''}
+                    onChange={(e) => setPersona((p) => ({ ...p, gender: e.target.value }))}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="—" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">—</SelectItem>
-                      <SelectItem value="Male">Male</SelectItem>
-                      <SelectItem value="Female">Female</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <option value="">—</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                  </select>
                 </div>
                 <div className="mem-span2">
                   <Label>Reply style</Label>
@@ -334,7 +451,7 @@ export default function UserMemoryPage() {
                 <div className="mem-span2">
                   <Label>User timezone (this session)</Label>
                   <select
-                    className="chat-session-select"
+                    className="sena-field chat-session-select"
                     value={profile.timezone}
                     onChange={(e) => setProfile((f) => ({ ...f, timezone: e.target.value }))}
                   >
@@ -360,29 +477,33 @@ export default function UserMemoryPage() {
                   Save timezone change
                 </Button>
               </div>
-              {otherSessions.length ? (
-                <div className="mem-copy-row mem-bot-copy-row">
-                  <Label>Copy assistant identity from</Label>
-                  <select
-                    className="chat-session-select"
-                    value={copyFromPersona}
-                    onChange={(e) => setCopyFromPersona(e.target.value)}
-                  >
-                    <option value="">— Pick another session —</option>
-                    {otherSessions.map((s) => (
-                      <option key={s.userId} value={s.userId}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    variant="outline"
-                    onClick={() => copyPersonaFrom().catch((e) => setStatus(e.message))}
-                  >
-                    Copy into current session
-                  </Button>
-                </div>
-              ) : null}
+              <div className="mem-copy-row mem-bot-copy-row">
+                <Label>Copy assistant identity from</Label>
+                <select
+                  className="sena-field chat-session-select"
+                  value={copyFromPersona}
+                  onChange={(e) => setCopyFromPersona(e.target.value)}
+                  disabled={!otherSessions.length}
+                >
+                  <option value="">
+                    {otherSessions.length
+                      ? '— Pick another session —'
+                      : '— No other sessions yet —'}
+                  </option>
+                  {otherSessions.map((s) => (
+                    <option key={s.userId} value={s.userId}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="outline"
+                  disabled={!copyFromPersona}
+                  onClick={() => copyPersonaFrom().catch((e) => setStatus(e.message))}
+                >
+                  Copy into current session
+                </Button>
+              </div>
               {status ? <p className="hint">{status}</p> : null}
             </CardContent>
           </Card>
@@ -410,7 +531,7 @@ export default function UserMemoryPage() {
                 <div>
                   <Label>Timezone</Label>
                   <select
-                    className="chat-session-select"
+                    className="sena-field chat-session-select"
                     value={profile.timezone}
                     onChange={(e) =>
                       setProfile((f) => ({ ...f, timezone: e.target.value }))
@@ -425,43 +546,31 @@ export default function UserMemoryPage() {
                 </div>
                 <div>
                   <Label>Gender</Label>
-                  <Select
-                    value={profile.gender || '__none'}
-                    onValueChange={(v) =>
-                      setProfile((f) => ({ ...f, gender: v === '__none' ? '' : v }))
-                    }
+                  <select
+                    className="sena-field"
+                    value={profile.gender || ''}
+                    onChange={(e) => setProfile((f) => ({ ...f, gender: e.target.value }))}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="—" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">—</SelectItem>
-                      <SelectItem value="Male">Male</SelectItem>
-                      <SelectItem value="Female">Female</SelectItem>
-                      <SelectItem value="Other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <option value="">—</option>
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                  </select>
                 </div>
                 <div>
                   <Label>Age</Label>
-                  <Select
-                    value={profile.age || '__none'}
-                    onValueChange={(v) =>
-                      setProfile((f) => ({ ...f, age: v === '__none' ? '' : v }))
-                    }
+                  <select
+                    className="sena-field"
+                    value={profile.age || ''}
+                    onChange={(e) => setProfile((f) => ({ ...f, age: e.target.value }))}
                   >
-                    <SelectTrigger>
-                      <SelectValue placeholder="—" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">—</SelectItem>
-                      {AGE_BUCKETS.map((a) => (
-                        <SelectItem key={a} value={a}>
-                          {a}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    <option value="">—</option>
+                    {AGE_BUCKETS.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <Label>Call me (English)</Label>
@@ -518,29 +627,33 @@ export default function UserMemoryPage() {
                   Save session memory
                 </Button>
               </div>
-              {otherSessions.length ? (
-                <div className="mem-copy-row">
-                  <Label>Copy memory from</Label>
-                  <select
-                    className="chat-session-select"
-                    value={copyFrom}
-                    onChange={(e) => setCopyFrom(e.target.value)}
-                  >
-                    <option value="">— Pick another session —</option>
-                    {otherSessions.map((s) => (
-                      <option key={s.userId} value={s.userId}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    variant="outline"
-                    onClick={() => copyProfileFrom().catch((e) => setStatus(e.message))}
-                  >
-                    Copy into current session
-                  </Button>
-                </div>
-              ) : null}
+              <div className="mem-copy-row">
+                <Label>Copy memory from</Label>
+                <select
+                  className="sena-field chat-session-select"
+                  value={copyFrom}
+                  onChange={(e) => setCopyFrom(e.target.value)}
+                  disabled={!otherSessions.length}
+                >
+                  <option value="">
+                    {otherSessions.length
+                      ? '— Pick another session —'
+                      : '— No other sessions yet —'}
+                  </option>
+                  {otherSessions.map((s) => (
+                    <option key={s.userId} value={s.userId}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="outline"
+                  disabled={!copyFrom}
+                  onClick={() => copyProfileFrom().catch((e) => setStatus(e.message))}
+                >
+                  Copy into current session
+                </Button>
+              </div>
               {status ? <p className="hint">{status}</p> : null}
             </CardContent>
           </Card>
@@ -557,12 +670,13 @@ export default function UserMemoryPage() {
                     <TableHead>Type</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Title</TableHead>
+                    <TableHead className="w-[1%]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {records.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={4} className="hint">
+                      <TableCell colSpan={5} className="hint">
                         No rows yet.
                       </TableCell>
                     </TableRow>
@@ -573,6 +687,18 @@ export default function UserMemoryPage() {
                         <TableCell>{r.record_type}</TableCell>
                         <TableCell>{r.record_date || '—'}</TableCell>
                         <TableCell>{r.title || '—'}</TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="text-destructive hover:text-destructive"
+                            onClick={() =>
+                              removeRecord(r.id).catch((e) => setStatus(e.message))
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))
                   )}
@@ -620,8 +746,15 @@ export default function UserMemoryPage() {
                           <Button
                             variant="outline"
                             onClick={() => {
+                              const key =
+                                s.botId != null && s.botId !== '' ? String(s.botId) : WEB_BOT_KEY;
                               setActiveTab('session');
-                              switchSession(s.userId);
+                              if (key !== currentBotKey) {
+                                setCurrentBotKey(key);
+                                refresh(s.userId, key).catch((e) => setStatus(e.message));
+                              } else {
+                                switchSession(s.userId);
+                              }
                             }}
                           >
                             Edit

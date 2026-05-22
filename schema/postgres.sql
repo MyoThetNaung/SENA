@@ -178,3 +178,35 @@ CREATE TABLE IF NOT EXISTS telegram_login_used (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_login_used_at ON telegram_login_used (used_at);
+
+-- Per web-login user: own Telegram bot token(s) and who may chat on each bot
+CREATE TABLE IF NOT EXISTS user_telegram_bots (
+  id BIGSERIAL PRIMARY KEY,
+  owner_soul_user_id BIGINT NOT NULL,
+  bot_token TEXT NOT NULL,
+  bot_id BIGINT NOT NULL,
+  bot_username TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  UNIQUE (owner_soul_user_id, bot_id),
+  UNIQUE (bot_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_telegram_bots_owner ON user_telegram_bots (owner_soul_user_id);
+
+CREATE TABLE IF NOT EXISTS user_bot_access (
+  id BIGSERIAL PRIMARY KEY,
+  owner_soul_user_id BIGINT NOT NULL,
+  bot_id BIGINT NOT NULL,
+  scoped_user_id BIGINT NOT NULL,
+  telegram_user_id BIGINT,
+  username TEXT,
+  first_name TEXT,
+  first_message_preview TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  last_seen TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  UNIQUE (owner_soul_user_id, bot_id, scoped_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_bot_access_owner_status ON user_bot_access (owner_soul_user_id, status);

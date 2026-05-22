@@ -130,6 +130,7 @@ export function resolveAuditEventType(req) {
   if (path === '/api/user/chat/send' && method === 'POST') return 'user.chat_send';
   if (path === '/api/user/chat/clear' && method === 'POST') return 'user.chat_clear';
   if (/^\/api\/user\/calendar\/\d+$/.test(path) && method === 'DELETE') return 'user.calendar_delete';
+  if (path === '/api/user/memory/records/delete' && method === 'POST') return 'user.records_delete';
 
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && path.startsWith('/api/')) {
     return 'api.request';
@@ -212,19 +213,31 @@ export async function logAuditFromRequest(req, res, overrides = {}) {
 }
 
 /**
- * @param {{ eventType?: string, limit?: number, offset?: number }} opts
+ * @param {{ eventType?: string, actorSoulUserId?: number, limit?: number, offset?: number }} opts
  */
 export async function listAuditLogs(opts = {}) {
   const limit = Math.min(500, Math.max(1, Number(opts.limit) || 100));
   const offset = Math.max(0, Number(opts.offset) || 0);
   const eventType = opts.eventType ? String(opts.eventType).trim() : null;
+  const actorSoulUserId =
+    opts.actorSoulUserId != null && Number.isFinite(Number(opts.actorSoulUserId))
+      ? Number(opts.actorSoulUserId)
+      : null;
 
   const args = [];
-  let where = '';
+  const clauses = [];
   if (eventType) {
     args.push(eventType);
-    where = ` WHERE event_type = $${args.length}`;
+    clauses.push(`event_type = $${args.length}`);
   }
+  if (actorSoulUserId != null) {
+    args.push(actorSoulUserId);
+    const n = args.length;
+    clauses.push(
+      `(actor_soul_user_id = $${n} OR target_soul_user_id = $${n})`
+    );
+  }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
   args.push(limit, offset);
 
   const r = await query(
@@ -236,9 +249,9 @@ export async function listAuditLogs(opts = {}) {
     args
   );
 
-  const countArgs = eventType ? [eventType] : [];
+  const countArgs = [...args.slice(0, args.length - 2)];
   const countR = await query(
-    `SELECT COUNT(*)::int AS n FROM audit_logs${eventType ? ' WHERE event_type = $1' : ''}`,
+    `SELECT COUNT(*)::int AS n FROM audit_logs${where}`,
     countArgs
   );
 

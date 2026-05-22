@@ -10,59 +10,32 @@ import {
 import { getSoul, setSoulContent, copySoulFromTo, copyBotPersonaFromTo } from '../memory/soul.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { getPool, query } from '../db.js';
-import { listEventsForUser, deleteEventForUser } from '../calendar/calendar.js';
-import { listUserRecords } from '../records/userRecords.js';
+import { listEventsForOwner, deleteEventForOwner } from '../calendar/calendar.js';
+import { deleteUserRecordById, listUserRecords } from '../records/userRecords.js';
 import { getAllowlistBySoulUserId } from '../access/telegramAllowlist.js';
-import { SCOPED_USER_ID_OFFSET } from '../access/telegramAccess.js';
+import {
+  listUserMemoryBots,
+  listUserMemorySessions,
+  listUserChatSessions,
+  listAllOwnedMemorySessions,
+  userOwnsMemorySession,
+} from '../access/userMemorySessions.js';
 import { handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
-import { getBotStatus } from './bot-runner.js';
+import { applyTelegramTokenListChange, getBotStatusForOwner } from './bot-runner.js';
+import {
+  addBotForOwner,
+  listBotsForOwner,
+  removeBotForOwner,
+} from '../access/userTelegramBots.js';
+import { listBotAccessForOwner, setBotAccessStatusForOwner } from '../access/userBotAccess.js';
 import { probeLlamaServerReachable } from '../llm/catalog.js';
 import { listCommonTimezones, normalizeTimezone } from '../util/timezone.js';
 import { ensureDefaultUserTimezone, DEFAULT_USER_TIMEZONE } from '../memory/soul.js';
 import { getUserMonthlyTokenUsage, monthKey } from '../llm/tokenUsage.js';
+import { listAuditLogs } from '../audit/auditLog.js';
 
 function soulUserId(req) {
   return Number(req.session.soulUserId);
-}
-
-/**
- * Soul rows the logged-in user is allowed to read or edit:
- * 1. their primary web soul (`soulUserId` from session), plus
- * 2. any Telegram-scoped souls (one per bot they've used) tied to their `telegram_user_id`.
- * @param {number} primaryUserId
- * @returns {Promise<Array<{ userId: number, label: string, scoped: boolean, botId: number|null }>>}
- */
-async function listOwnedSessions(primaryUserId) {
-  const sessions = [{ userId: primaryUserId, label: 'Web account', scoped: false, botId: null }];
-
-  const allow = await getAllowlistBySoulUserId(primaryUserId);
-  const tid =
-    allow?.telegram_user_id != null && Number.isFinite(Number(allow.telegram_user_id))
-      ? Number(allow.telegram_user_id)
-      : null;
-  if (!tid) return sessions;
-
-  const r = await query(
-    `SELECT id, bot_id, username, first_name, last_seen
-     FROM telegram_identity_map
-     WHERE telegram_user_id = $1
-     ORDER BY last_seen DESC NULLS LAST, id`,
-    [tid]
-  );
-  for (const row of r.rows) {
-    const scopedUserId = SCOPED_USER_ID_OFFSET + Number(row.id);
-    if (!Number.isFinite(scopedUserId)) continue;
-    const label =
-      `Telegram bot ${row.bot_id}` +
-      (row.username ? ` — @${row.username}` : row.first_name ? ` — ${row.first_name}` : '');
-    sessions.push({
-      userId: scopedUserId,
-      label,
-      scoped: true,
-      botId: Number(row.bot_id) || null,
-    });
-  }
-  return sessions;
 }
 
 async function resolveTargetSessionId(req) {
@@ -72,8 +45,8 @@ async function resolveTargetSessionId(req) {
   const requested = Number(raw);
   if (!Number.isFinite(requested)) return primary;
   if (requested === primary) return primary;
-  const owned = await listOwnedSessions(primary);
-  return owned.some((s) => s.userId === requested) ? requested : primary;
+  const ok = await userOwnsMemorySession(primary, requested);
+  return ok ? requested : primary;
 }
 
 async function probeLlmOnline() {
@@ -127,7 +100,7 @@ export function createUserRouter() {
       await ensureDefaultUserTimezone(userId);
       const soul = await getSoul(userId);
       const allow = await getAllowlistBySoulUserId(userId);
-      const bot = getBotStatus();
+      const bot = getBotStatusForOwner(userId);
       const llmOnline = await probeLlmOnline();
       const prof = soul.preferences?.profile || {};
       const tz = normalizeTimezone(prof.timezone) || DEFAULT_USER_TIMEZONE;
@@ -165,6 +138,18 @@ export function createUserRouter() {
     }
   });
 
+  router.get('/activity-log', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const limit = req.query.limit;
+      const data = await listAuditLogs({ actorSoulUserId: userId, limit });
+      res.json({ rows: data.rows, total: data.total });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   router.get('/timezones', (req, res) => {
     res.json({ timezones: listCommonTimezones(), defaultTimezone: DEFAULT_USER_TIMEZONE });
   });
@@ -195,11 +180,34 @@ export function createUserRouter() {
     }
   });
 
+  router.get('/memory/bots', async (req, res) => {
+    try {
+      await getPool();
+      const primaryUserId = soulUserId(req);
+      const bots = await listUserMemoryBots(primaryUserId);
+      res.json({ bots, primaryUserId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.get('/memory/sessions', async (req, res) => {
+    try {
+      await getPool();
+      const primaryUserId = soulUserId(req);
+      const botId = req.query.botId;
+      const sessions = await listUserChatSessions(primaryUserId, botId);
+      res.json({ primaryUserId, sessions, botId: botId ?? null });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   router.get('/sessions', async (req, res) => {
     try {
       await getPool();
       const primaryUserId = soulUserId(req);
-      const sessions = await listOwnedSessions(primaryUserId);
+      const sessions = await listAllOwnedMemorySessions(primaryUserId);
       res.json({ primaryUserId, sessions });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -210,7 +218,11 @@ export function createUserRouter() {
     try {
       await getPool();
       const primaryUserId = soulUserId(req);
-      const owned = await listOwnedSessions(primaryUserId);
+      const botId = req.query.botId != null && req.query.botId !== '' ? Number(req.query.botId) : null;
+      let owned = await listAllOwnedMemorySessions(primaryUserId);
+      if (Number.isFinite(botId)) {
+        owned = owned.filter((s) => s.botId === botId);
+      }
       const souls = [];
       for (const s of owned) {
         const soul = await getSoul(s.userId);
@@ -240,7 +252,10 @@ export function createUserRouter() {
       await ensureDefaultUserTimezone(targetUserId);
       const soul = await getSoul(targetUserId);
       const records = await listUserRecords(targetUserId, { limit: 200 });
-      const sessions = await listOwnedSessions(primaryUserId);
+      const botId = req.query.botId;
+      const sessions = Number.isFinite(Number(botId))
+        ? await listUserMemorySessions(primaryUserId, botId)
+        : await listAllOwnedMemorySessions(primaryUserId);
       res.json({ soul, records, sessions, primaryUserId, sessionUserId: targetUserId });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -267,11 +282,11 @@ export function createUserRouter() {
     try {
       await getPool();
       const primaryUserId = soulUserId(req);
-      const owned = await listOwnedSessions(primaryUserId);
-      const ownedIds = new Set(owned.map((s) => s.userId));
       const fromUserId = Number((req.body || {}).fromUserId);
       const toUserId = Number((req.body || {}).toUserId);
-      if (!ownedIds.has(fromUserId) || !ownedIds.has(toUserId)) {
+      const okFrom = await userOwnsMemorySession(primaryUserId, fromUserId);
+      const okTo = await userOwnsMemorySession(primaryUserId, toUserId);
+      if (!okFrom || !okTo) {
         res.status(400).json({ ok: false, error: 'You can only copy between your own sessions.' });
         return;
       }
@@ -286,11 +301,11 @@ export function createUserRouter() {
     try {
       await getPool();
       const primaryUserId = soulUserId(req);
-      const owned = await listOwnedSessions(primaryUserId);
-      const ownedIds = new Set(owned.map((s) => s.userId));
       const fromUserId = Number((req.body || {}).fromUserId);
       const toUserId = Number((req.body || {}).toUserId);
-      if (!ownedIds.has(fromUserId) || !ownedIds.has(toUserId)) {
+      const okFrom = await userOwnsMemorySession(primaryUserId, fromUserId);
+      const okTo = await userOwnsMemorySession(primaryUserId, toUserId);
+      if (!okFrom || !okTo) {
         res.status(400).json({ ok: false, error: 'You can only copy between your own sessions.' });
         return;
       }
@@ -301,13 +316,69 @@ export function createUserRouter() {
     }
   });
 
+  router.post('/memory/records/delete', async (req, res) => {
+    try {
+      await getPool();
+      const targetUserId = await resolveTargetSessionId(req);
+      const id = Number((req.body || {}).id);
+      if (!Number.isFinite(id) || id < 1) {
+        res.status(400).json({ ok: false, error: 'Valid record id is required.' });
+        return;
+      }
+      const ok = await deleteUserRecordById(targetUserId, id);
+      if (!ok) {
+        res.status(404).json({ ok: false, error: 'No record with that id for this session.' });
+        return;
+      }
+      res.json({ ok: true, sessionUserId: targetUserId });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/chat/bots', async (req, res) => {
+    try {
+      await getPool();
+      const primaryUserId = soulUserId(req);
+      const bots = await listUserMemoryBots(primaryUserId);
+      res.json({ bots, primaryUserId });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.get('/chat/sessions', async (req, res) => {
+    try {
+      await getPool();
+      const primaryUserId = soulUserId(req);
+      const botId = req.query.botId;
+      const sessions = await listUserChatSessions(primaryUserId, botId);
+      res.json({ primaryUserId, sessions, botId: botId ?? null });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   router.get('/chat', async (req, res) => {
     try {
       await getPool();
-      const userId = soulUserId(req);
+      const primaryUserId = soulUserId(req);
+      const rawUid = req.query.userId ?? req.query.sessionUserId;
+      let userId = primaryUserId;
+      if (rawUid != null && rawUid !== '') {
+        const requested = Number(rawUid);
+        if (Number.isFinite(requested)) {
+          const ok = await userOwnsMemorySession(primaryUserId, requested);
+          if (!ok) {
+            res.status(403).json({ error: 'You do not have access to this chat session.' });
+            return;
+          }
+          userId = requested;
+        }
+      }
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 150));
       const rows = await listChatMessages({ userId, limit });
-      res.json({ messages: rows, userId });
+      res.json({ messages: rows, userId, primaryUserId });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -318,7 +389,20 @@ export function createUserRouter() {
       reloadConfig();
       await getPool();
       const cfg = getConfig();
-      const userId = soulUserId(req);
+      const primaryUserId = soulUserId(req);
+      const rawUid = (req.body || {}).userId ?? (req.body || {}).sessionUserId;
+      let userId = primaryUserId;
+      if (rawUid != null && rawUid !== '') {
+        const requested = Number(rawUid);
+        if (Number.isFinite(requested)) {
+          const ok = await userOwnsMemorySession(primaryUserId, requested);
+          if (!ok) {
+            res.status(403).json({ ok: false, error: 'You do not have access to this chat session.' });
+            return;
+          }
+          userId = requested;
+        }
+      }
       const text = String((req.body || {}).text ?? '').trim();
       const imageDataUrl = String((req.body || {}).imageDataUrl ?? '').trim();
       if (!text && !imageDataUrl) {
@@ -355,10 +439,23 @@ export function createUserRouter() {
 
   router.post('/chat/clear', async (req, res) => {
     try {
-      const userId = soulUserId(req);
+      const primaryUserId = soulUserId(req);
+      const rawUid = (req.body || {}).userId ?? (req.body || {}).sessionUserId;
+      let userId = primaryUserId;
+      if (rawUid != null && rawUid !== '') {
+        const requested = Number(rawUid);
+        if (Number.isFinite(requested)) {
+          const ok = await userOwnsMemorySession(primaryUserId, requested);
+          if (!ok) {
+            res.status(403).json({ ok: false, error: 'You do not have access to this chat session.' });
+            return;
+          }
+          userId = requested;
+        }
+      }
       await getPool();
       const deleted = await clearChatMessagesForUser(userId);
-      res.json({ ok: true, deleted });
+      res.json({ ok: true, deleted, userId });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
     }
@@ -369,11 +466,25 @@ export function createUserRouter() {
       await getPool();
       const userId = soulUserId(req);
       const row = await getAllowlistBySoulUserId(userId);
+      const bots = await listBotsForOwner(userId);
+      const base = {
+        bots,
+        linked: false,
+        username: null,
+        telegramUserId: null,
+        email: null,
+        status: null,
+        invitedAt: null,
+        firstLoginAt: null,
+        lastSeen: null,
+        notes: '',
+      };
       if (!row) {
-        res.json({ linked: false, username: null, telegramUserId: null, status: null });
+        res.json(base);
         return;
       }
       res.json({
+        ...base,
         linked: true,
         username: row.username || null,
         telegramUserId: row.telegram_user_id != null ? Number(row.telegram_user_id) : null,
@@ -389,39 +500,84 @@ export function createUserRouter() {
     }
   });
 
+  router.post('/telegram/bots', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const token = String((req.body || {}).token ?? '').trim();
+      if (!token) {
+        res.status(400).json({ ok: false, error: 'Bot token is required.' });
+        return;
+      }
+      const bot = await addBotForOwner(userId, token);
+      await applyTelegramTokenListChange().catch(() => {});
+      res.json({ ok: true, bot });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.delete('/telegram/bots/:botId', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const botId = Number(req.params.botId);
+      await removeBotForOwner(userId, botId);
+      await applyTelegramTokenListChange().catch(() => {});
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
   router.get('/access', async (req, res) => {
     try {
       await getPool();
       const userId = soulUserId(req);
-      const row = await getAllowlistBySoulUserId(userId);
-      if (!row) {
-        res.json({ entry: null });
-        return;
-      }
-      res.json({
-        entry: {
-          id: row.id,
-          username: row.username,
-          telegramUserId: row.telegram_user_id,
-          email: row.email,
-          status: row.status,
-          invitedAt: row.invited_at,
-          firstLoginAt: row.first_login_at,
-          lastSeen: row.last_seen,
-          notes: row.notes || '',
-        },
-      });
+      const status = req.query.status ? String(req.query.status) : null;
+      const rows = await listBotAccessForOwner(userId, status);
+      const users = rows.map((row) => ({
+        id: Number(row.id),
+        botId: Number(row.bot_id),
+        botUsername: row.bot_username || null,
+        scopedUserId: Number(row.scoped_user_id),
+        telegramUserId: row.telegram_user_id != null ? Number(row.telegram_user_id) : null,
+        username: row.username || null,
+        firstName: row.first_name || null,
+        firstMessagePreview: row.first_message_preview || '',
+        status: row.status,
+        createdAt: row.created_at,
+        lastSeen: row.last_seen,
+      }));
+      res.json({ users });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.patch('/access/:id', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const accessId = Number(req.params.id);
+      const status = String((req.body || {}).status ?? '').toLowerCase();
+      if (!['approved', 'blocked', 'pending'].includes(status)) {
+        res.status(400).json({ ok: false, error: 'status must be approved, blocked, or pending' });
+        return;
+      }
+      await setBotAccessStatusForOwner(userId, accessId, status);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
     }
   });
 
   router.get('/calendar', async (req, res) => {
     try {
       await getPool();
-      const userId = soulUserId(req);
+      const ownerId = soulUserId(req);
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
-      const events = await listEventsForUser(userId, limit);
+      const events = await listEventsForOwner(ownerId, limit);
       res.json({ events });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -430,14 +586,14 @@ export function createUserRouter() {
 
   router.delete('/calendar/:id', async (req, res) => {
     try {
-      const userId = soulUserId(req);
+      const ownerId = soulUserId(req);
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) {
         res.status(400).json({ ok: false, error: 'Invalid event id' });
         return;
       }
       await getPool();
-      const ok = await deleteEventForUser(userId, id);
+      const ok = await deleteEventForOwner(ownerId, id);
       res.json({ ok });
     } catch (e) {
       res.status(400).json({ ok: false, error: e.message });
@@ -446,7 +602,7 @@ export function createUserRouter() {
 
   router.get('/bot/status', (req, res) => {
     try {
-      const bot = getBotStatus();
+      const bot = getBotStatusForOwner(soulUserId(req));
       res.json({
         running: bot.running,
         botCount: bot.botCount,

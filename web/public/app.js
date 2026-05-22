@@ -561,129 +561,9 @@ function initScrollbarArrowGlow() {
 }
 
 function initCustomCursor() {
-  const cursor = document.querySelector('.cursor');
-  const ring = document.querySelector('.cursor-ring');
-  if (!cursor || !ring) return;
-  if (!window.matchMedia('(pointer: fine)').matches) return;
-
-  document.body.classList.add('custom-cursor-active');
-
-  let mouseX = window.innerWidth / 2;
-  let mouseY = window.innerHeight / 2;
-  let ringX = mouseX;
-  let ringY = mouseY;
-  let visible = false;
-  let hovering = false;
-  let pressed = false;
-  let textMode = false;
-  let targetMode = false;
-  let targetEl = null;
-  let ringW = 35;
-  let ringH = 35;
-
-  const textSelector =
-    'input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]), textarea, [contenteditable="true"]';
-  const sideMenuSelector =
-    '#mainNav .nav-item, #mainNav .nav-settings-toggle, #lblBotPower, .bot-power-switch, .neo-toggle, .neo-toggle-container';
-
-  function setVisible(on) {
-    visible = on;
-    cursor.style.opacity = on ? '1' : '0';
-    ring.style.opacity = on ? '1' : '0';
-  }
-
-  function applyRingVisual() {
-    cursor.classList.toggle('cursor-text-mode', textMode);
-    if (textMode) {
-      ring.style.opacity = '0';
-      ring.style.transform = 'translate(-50%, -50%) scale(0.4)';
-      ring.style.borderColor = 'rgba(120,150,255,0.6)';
-      return;
-    }
-    ring.style.opacity = visible ? '1' : '0';
-    ring.classList.toggle('cursor-ring-target', targetMode);
-    let scale = 1;
-    if (!targetMode) scale = hovering ? 1.8 : 1;
-    if (pressed) scale *= 0.92;
-    ring.style.transform = `translate(-50%, -50%) scale(${scale})`;
-    if (targetMode) {
-      ring.style.borderColor = 'rgba(120,170,255,0.9)';
-    } else {
-      ring.style.borderColor = hovering ? 'rgba(236,72,153,0.8)' : 'rgba(120,150,255,0.6)';
-    }
-  }
-
-  function setHover(on) {
-    hovering = on;
-    applyRingVisual();
-  }
-
-  function setTarget(el) {
-    targetEl = el || null;
-    targetMode = Boolean(targetEl);
-    applyRingVisual();
-  }
-
-  document.addEventListener('pointermove', (e) => {
-    mouseX = e.clientX;
-    mouseY = e.clientY;
-    cursor.style.left = `${mouseX}px`;
-    cursor.style.top = `${mouseY}px`;
-    if (!visible) setVisible(true);
-  });
-
-  document.addEventListener('pointerleave', () => setVisible(false));
-  document.addEventListener('pointerenter', () => setVisible(true));
-
-  document.addEventListener('pointerover', (e) => {
-    textMode = Boolean(e.target.closest(textSelector));
-    setTarget(e.target.closest(sideMenuSelector));
-    const hit = e.target.closest('button, a, .clickable, [role="button"], input, select, textarea, label');
-    setHover(Boolean(hit));
-  });
-
-  document.addEventListener('pointerdown', () => {
-    pressed = true;
-    applyRingVisual();
-  });
-  document.addEventListener('pointerup', () => {
-    pressed = false;
-    const elAtPoint = document.elementFromPoint(mouseX, mouseY);
-    const hit = elAtPoint?.closest(
-      'button, a, .clickable, [role="button"], input, select, textarea, label'
-    );
-    textMode = Boolean(elAtPoint?.closest(textSelector));
-    setTarget(elAtPoint?.closest(sideMenuSelector));
-    setHover(Boolean(hit));
-  });
-
-  function animate() {
-    let tx = mouseX;
-    let ty = mouseY;
-    let tw = 35;
-    let th = 35;
-    if (targetMode && targetEl?.isConnected) {
-      const rect = targetEl.getBoundingClientRect();
-      tx = rect.left + rect.width / 2;
-      ty = rect.top + rect.height / 2;
-      tw = Math.max(42, rect.width + 12);
-      th = Math.max(28, rect.height + 8);
-    } else if (targetMode) {
-      setTarget(null);
-    }
-
-    const follow = targetMode ? 0.32 : 0.28;
-    ringX += (tx - ringX) * follow;
-    ringY += (ty - ringY) * follow;
-    ringW += (tw - ringW) * follow;
-    ringH += (th - ringH) * follow;
-    ring.style.left = `${ringX}px`;
-    ring.style.top = `${ringY}px`;
-    ring.style.width = `${ringW}px`;
-    ring.style.height = `${ringH}px`;
-    requestAnimationFrame(animate);
-  }
-  animate();
+  import('/custom-cursor.js')
+    .then((m) => m.initCustomCursor())
+    .catch(() => {});
 }
 
 /**
@@ -2170,11 +2050,18 @@ function getSelectedMemoryBotId() {
 }
 
 function getMemoryBotLabel(botId, fallback = null) {
+  const byBot = lastSettingsForGui?.botPersonaByBotId;
+  if (byBot && typeof byBot === 'object') {
+    const personaName = String(byBot[String(botId)]?.displayName || '').trim();
+    if (personaName) return personaName;
+  }
   const names = lastSettingsForGui?.memoryBotNamesById;
   const custom =
     names && typeof names === 'object' ? String(names[String(botId)] || '').trim() : '';
   return custom || fallback || `Bot ${botId}`;
 }
+
+let lastMemoryBotsList = [];
 
 const MEM_TIMEZONE_SELECT_IDS = ['memUserTimezone', 'memBotUserTimezone', 'memSessionTimezone'];
 
@@ -2241,8 +2128,9 @@ function syncMemTimezoneSelects(fromEl) {
 function renderMemoryBotSelect(bots) {
   const sel = $('memBotSelect');
   if (!sel) return;
-  sel.innerHTML = '';
   const list = Array.isArray(bots) ? bots : [];
+  lastMemoryBotsList = list;
+  sel.innerHTML = '';
   if (!list.length) {
     const o = document.createElement('option');
     o.value = '';
@@ -2269,110 +2157,17 @@ function renderMemoryBotSelect(bots) {
   }
 }
 
-function ensureMemoryBotTabsHost() {
-  let wrap = $('memBotTabsWrap');
-  const host = $('memBotSelect')?.closest('.mem-bot-select-wrap');
-  if (!host) return null;
-  if (!wrap) {
-    wrap = document.createElement('div');
-    wrap.id = 'memBotTabsWrap';
-    wrap.className = 'mem-bot-tabs-wrap';
-    wrap.innerHTML =
-      '<div class="mem-bot-tabs-label">Bots</div><div id="memBotTabs" class="mem-bot-tabs" role="tablist"></div>';
-    host.insertBefore(wrap, host.firstChild);
-    wrap = $('memBotTabsWrap');
-    const tabsEl = $('memBotTabs');
-    if (tabsEl?.parentElement && tabsEl.parentElement !== wrap) {
-      wrap.appendChild(tabsEl);
-    }
-  }
-  return $('memBotTabs');
+function removeMemoryBotTabsUi() {
+  $('memBotTabsWrap')?.remove();
 }
 
-function renderMemoryBotTabs(bots) {
-  renderMemoryBotSelect(bots);
-  const tabs = ensureMemoryBotTabsHost() || $('memBotTabs');
-  if (!tabs) return;
-
-  const list = Array.isArray(bots) ? bots : [];
-  tabs.replaceChildren();
-  if (!list.length) {
-    const empty = document.createElement('span');
-    empty.className = 'hint';
-    empty.textContent = 'No Telegram bots — add tokens on the Telegram tab';
-    tabs.appendChild(empty);
-    return;
-  }
-
-  let idx = 0;
-  for (const b of list) {
-    const botId = Number(b.botId);
-    if (!Number.isFinite(botId)) continue;
-    idx += 1;
-    const uname = String(b?.username || '').trim().replace(/^@+/, '');
-    const label = uname
-      ? getMemoryBotLabel(botId, `@${uname}`)
-      : getMemoryBotLabel(botId, `Bot ${idx}`);
-    const active = currentMemoryBotId === botId;
-
-    const tab = document.createElement('button');
-    tab.type = 'button';
-    tab.className = `mem-bot-tab${active ? ' active' : ''}`;
-    tab.dataset.botId = String(botId);
-    tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-selected', active ? 'true' : 'false');
-
-    const nameEl = document.createElement('span');
-    nameEl.className = 'mem-bot-tab-label';
-    nameEl.textContent = label;
-    tab.appendChild(nameEl);
-
-    const edit = document.createElement('span');
-    edit.className = 'mem-bot-tab-edit';
-    edit.setAttribute('role', 'button');
-    edit.tabIndex = 0;
-    edit.title = 'Rename';
-    edit.textContent = '✎';
-    edit.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const next = window.prompt(`Rename label for Bot ${botId}:`, getMemoryBotLabel(botId));
-      if (next == null) return;
-      saveMemoryBotTabName(botId, next)
-        .then(() => loadDataTab())
-        .catch((e) => setStatus(e.message, 'err'));
-    });
-    edit.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter' || ev.key === ' ') {
-        ev.preventDefault();
-        edit.click();
-      }
-    });
-    tab.appendChild(edit);
-
-    tab.addEventListener('click', () => {
-      if (currentMemoryBotId === botId) return;
-      currentMemoryBotId = botId;
-      try {
-        localStorage.setItem(MEMORY_BOT_KEY, String(botId));
-      } catch {
-        /* ignore */
-      }
-      const sel = $('memBotSelect');
-      if (sel) sel.value = String(botId);
-      renderMemoryBotTabs(list);
-      loadDataTab().catch((e) => setStatus(e.message, 'err'));
-    });
-
-    tabs.appendChild(tab);
-  }
-}
-
-async function saveMemoryBotTabName(botId, name) {
+async function syncMemoryBotLabelFromDisplayName(botId, displayName) {
+  if (!Number.isFinite(botId)) return;
   const existing =
     lastSettingsForGui?.memoryBotNamesById && typeof lastSettingsForGui.memoryBotNamesById === 'object'
       ? { ...lastSettingsForGui.memoryBotNamesById }
       : {};
-  const n = String(name || '').trim();
+  const n = String(displayName || '').trim();
   if (n) existing[String(botId)] = n;
   else delete existing[String(botId)];
   const r = await apiFetch('/api/settings', {
@@ -2381,8 +2176,9 @@ async function saveMemoryBotTabName(botId, name) {
     body: JSON.stringify({ memoryBotNamesById: existing }),
   });
   const j = await r.json();
-  if (!r.ok) throw new Error(j.error || 'Rename failed');
+  if (!r.ok) throw new Error(j.error || 'Bot label sync failed');
   lastSettingsForGui = j.settings || lastSettingsForGui;
+  renderMemoryBotSelect(lastMemoryBotsList);
 }
 
 async function loadMemoryBotOptions() {
@@ -2408,7 +2204,8 @@ async function loadMemoryBotOptions() {
   } catch {
     /* ignore */
   }
-  renderMemoryBotTabs(bots);
+  removeMemoryBotTabsUi();
+  renderMemoryBotSelect(bots);
 }
 
 async function loadMemorySessionsIntoSelects() {
@@ -3500,6 +3297,10 @@ if ($('btnSaveBotPersona')) {
       if (!r.ok) throw new Error(j.error || 'Save failed');
       logLine(`Assistant identity saved for session ${uid}.`);
       setStatus('Assistant identity saved for this session.', 'ok');
+      const botId = getSelectedMemoryBotId();
+      if (Number.isFinite(botId)) {
+        await syncMemoryBotLabelFromDisplayName(botId, botPersona.displayName);
+      }
       await loadSoulForCurrentMemSession();
       await loadSouls();
     } catch (e) {
@@ -3545,6 +3346,7 @@ if ($('btnSaveBotPersonaGlobal')) {
       logLine(`Assistant defaults saved for bot ${botId}.`);
       setStatus('Bot-specific assistant defaults saved.', 'ok');
       await loadSettingsIntoForm();
+      await syncMemoryBotLabelFromDisplayName(botId, byBot[String(botId)].displayName);
     } catch (e) {
       setStatus(e.message, 'err');
       logLine('Global bot persona: ' + e.message);
@@ -3637,21 +3439,6 @@ if ($('memBotSelect')) {
       /* ignore */
     }
     loadDataTab().catch((e) => setStatus(e.message, 'err'));
-  });
-}
-if ($('btnRenameMemBot')) {
-  $('btnRenameMemBot').addEventListener('click', () => {
-    const botId = getSelectedMemoryBotId();
-    if (!Number.isFinite(botId)) {
-      setStatus('Pick a bot first.', 'err');
-      return;
-    }
-    const current = getMemoryBotLabel(botId);
-    const next = window.prompt(`Rename label for Bot ${botId}:`, current);
-    if (next == null) return;
-    saveMemoryBotTabName(botId, next)
-      .then(() => loadDataTab())
-      .catch((e) => setStatus(e.message, 'err'));
   });
 }
 for (const tzId of MEM_TIMEZONE_SELECT_IDS) {

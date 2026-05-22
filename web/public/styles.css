@@ -40,7 +40,7 @@
 
 .mem-toolbar-grid {
   display: grid;
-  grid-template-columns: minmax(200px, 1.2fr) minmax(200px, 1.2fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr);
   gap: 1rem 1.25rem;
   align-items: end;
   width: 100%;
@@ -53,6 +53,24 @@
   flex-direction: column;
   gap: 0.35rem;
   min-width: 0;
+}
+
+.mem-toolbar-grid .mem-bot-select-wrap {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.mem-toolbar-grid .mem-bot-select-wrap .session-select-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.mem-toolbar-grid .mem-bot-select-wrap .session-select-row label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #b8c2d8;
 }
 
 .mem-bot-select-wrap {
@@ -342,6 +360,8 @@ textarea::-webkit-scrollbar-corner {
 .scroll-indicator.is-scrollable {
   transform: translate3d(0, 0, 0);
   opacity: 1;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 @keyframes scrollIndArrowUp {
@@ -1739,6 +1759,8 @@ input[type='text'],
 input[type='email'],
 input[type='password'],
 input[type='number'],
+input[type='month'],
+input[type='date'],
 select,
 textarea {
   width: 100%;
@@ -1752,8 +1774,13 @@ textarea {
   color: #e8eaed;
   font-size: 0.92rem;
 }
+input[type='month'],
+input[type='date'] {
+  color-scheme: dark;
+}
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: 2px solid #4d7cff;
   border-color: #4d7cff;
 }
@@ -3457,6 +3484,12 @@ button:disabled {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.mem-bot-card,
+.mem-user-card,
+.mem-records-card {
+  overflow: visible;
+}
+
 .mem-bot-card .mem-grid,
 .mem-user-card .mem-grid {
   display: grid;
@@ -3464,12 +3497,21 @@ button:disabled {
   gap: 0.65rem 1rem;
   margin: 0.75rem 0;
 }
+
+.mem-grid .sena-field,
+.mem-grid select.sena-field {
+  position: relative;
+  z-index: 1;
+}
 .mem-span2 {
   grid-column: 1 / -1;
 }
 .mem-grid textarea,
 .mem-grid input[type='text'],
-.mem-grid select {
+.mem-grid input[type='month'],
+.mem-grid input[type='date'],
+.mem-grid select,
+.mem-grid .sena-field {
   width: 100%;
   padding: 0.45rem 0.55rem;
   border-radius: 8px;
@@ -3702,48 +3744,230 @@ button:disabled {
   }
 }
 
+/* Mobile: top bar + slide-out navigation */
+.portal-mobile-header,
+.portal-sidebar-backdrop {
+  display: none;
+}
+
 @media (max-width: 800px) {
+  .portal-mobile-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    flex-shrink: 0;
+    padding: 0.5rem 0.65rem;
+    background: rgba(15, 22, 34, 0.94);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(36, 48, 68, 0.9);
+    position: sticky;
+    top: 0;
+    z-index: 1200;
+    box-sizing: border-box;
+  }
+
+  .portal-menu-btn {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0.4rem;
+    border: 1px solid rgba(51, 65, 85, 0.9);
+    border-radius: 8px;
+    background: rgba(10, 13, 17, 0.55);
+    color: #e8eaed;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .portal-menu-btn-bar {
+    display: block;
+    width: 100%;
+    height: 2px;
+    border-radius: 1px;
+    background: #b8d4ff;
+  }
+
+  .portal-menu-open .portal-menu-btn-bar:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+
+  .portal-menu-open .portal-menu-btn-bar:nth-child(2) {
+    opacity: 0;
+  }
+
+  .portal-menu-open .portal-menu-btn-bar:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+
+  .portal-menu-btn-bar {
+    transition: transform 0.18s ease, opacity 0.18s ease;
+  }
+
+  .portal-mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    text-decoration: none;
+    color: inherit;
+    flex-shrink: 0;
+  }
+
+  .portal-mobile-logo {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+    display: block;
+  }
+
+  .portal-mobile-brand-name {
+    font-size: 1.15rem;
+    line-height: 1;
+    white-space: nowrap;
+  }
+
+  .portal-mobile-page {
+    margin-left: auto;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #8b98a5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 38%;
+    text-align: right;
+  }
+
+  .portal-mobile-header-neural {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  /* Neural toggle lives in the mobile top bar for user portal */
+  .user-portal .tab-panel.active > h1 .neural-bg-toggle-wrap {
+    display: none;
+  }
+
+  /* User portal: no right-edge chevron scroll rail on mobile */
+  .user-portal .scroll-indicator {
+    display: none !important;
+    pointer-events: none !important;
+  }
+
+  .user-portal .main.has-scroll-indicator {
+    --main-scroll-gutter: 0px;
+  }
+
+  /* Bot above Session (not side-by-side) on Memory / Chat */
+  .user-portal .mem-toolbar-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .user-portal .mem-toolbar-grid .mem-bot-select-wrap {
+    width: 100%;
+  }
+
+  .user-portal .mem-toolbar-grid .mem-bot-select-wrap select {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .portal-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1250;
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: rgba(3, 6, 12, 0.68);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.22s ease;
+    cursor: pointer;
+  }
+
+  .portal-sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .shell {
     flex-direction: column;
+    padding-top: 0;
+    overflow: hidden;
   }
+
   .sidebar {
-    width: 100%;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(288px, 88vw);
+    max-width: 88vw;
+    z-index: 1300;
+    transform: translateX(-105%);
+    transition: transform 0.24s ease;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    margin: 0;
+    padding: 1rem 0.75rem;
+    box-shadow: 8px 0 32px rgba(0, 0, 0, 0.45);
   }
+
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+
   .nav.sidebar-nav-panel {
-    flex-direction: row;
-    flex-wrap: wrap;
+    flex-direction: column;
+    flex-wrap: nowrap;
     flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
+
   .nav-group {
-    flex-basis: 100%;
+    flex-basis: auto;
     margin-top: 0.5rem;
   }
+
   .sidebar-bottom {
     width: 100%;
-    flex-basis: 100%;
-    flex-direction: row;
-    align-items: stretch;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin-top: 0.5rem;
+    flex-basis: auto;
+    flex-direction: column;
+    margin-top: auto;
   }
+
   .sidebar-actions {
-    flex: 1;
-    flex-direction: row;
-    min-width: 0;
+    flex-direction: column;
+    width: 100%;
     margin-top: 0;
     border-top: 1px solid #243044;
+    padding-top: 0.65rem;
+  }
+
+  .sidebar-footer {
+    margin-top: 0.5rem;
+    align-self: stretch;
+    min-width: 0;
     padding-top: 0.5rem;
   }
-  .sidebar-footer {
-    margin-top: 0;
-    flex-shrink: 0;
-    align-self: flex-end;
-    min-width: 7.5rem;
-    padding-top: 0.5rem;
+
+  .main {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -3756,9 +3980,117 @@ button:disabled {
   padding-top: 0;
 }
 
-/* User portal (limited access) */
+/* User portal overview layout */
+.user-portal .user-overview-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.user-portal .user-overview-top-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  width: 100%;
+}
+
+.user-portal .user-overview-top-row .status-card-value-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  font-size: clamp(0.95rem, 1.6vw, 1.5rem);
+}
+
+.user-portal .user-overview-top-row .overview-clock-line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  font-size: clamp(0.78rem, 1.4vw, 1.25rem);
+}
+
+.user-portal .user-overview-top-row .status-card-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-portal .user-overview-token-card,
+.user-portal .user-overview-log-card {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.user-portal .user-overview-token-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  margin-top: 0.5rem;
+}
+
+.user-portal .user-overview-token-toolbar label {
+  margin: 0;
+}
+
+.user-portal .user-overview-token-toolbar .sena-field {
+  width: auto;
+  min-width: 10.5rem;
+  max-width: 100%;
+}
+
+.user-portal .user-overview-token-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem 1.5rem;
+  margin-top: 0.85rem;
+  width: 100%;
+}
+
+.user-portal .user-overview-token-stat-sm {
+  font-size: 1rem;
+}
+
+.user-portal .user-overview-token-empty {
+  margin-top: 0.75rem;
+}
+
+.user-portal .user-overview-log-card .status-card-head {
+  margin-bottom: 0.5rem;
+}
+
+.user-portal .user-overview-log {
+  margin-top: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 12rem;
+  max-height: min(42vh, 320px);
+  box-sizing: border-box;
+}
+
+.user-portal .user-overview-log::before {
+  content: 'USER LOG';
+}
+
+/* Legacy user.html overview grid alias */
 .user-portal .user-overview-grid {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .user-portal .user-overview-top-row,
+  .user-portal .user-overview-token-stats {
+    grid-template-columns: 1fr;
+  }
 }
 
 .user-portal .user-bot-readonly .switch {

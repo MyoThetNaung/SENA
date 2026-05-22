@@ -1,5 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { resolveScopedTelegramUserId, touchTelegramUser } from '../access/telegramAccess.js';
+import { getOwnerSoulUserIdForBotId } from '../access/userTelegramBots.js';
 import { appendChatMessage } from '../chat/chatLog.js';
 import { getConfig } from '../config.js';
 import { handleConfirmCallback, handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
@@ -71,19 +72,22 @@ export async function createBot(token, index = 0) {
       return;
     }
 
-    const access = await touchTelegramUser(userId, msg.from, previewFromMessage(msg), rawUserId);
+    const access = await touchTelegramUser(userId, msg.from, previewFromMessage(msg), rawUserId, botId);
     if (access === 'no_username') {
-      await bot.sendMessage(
-        chatId,
-        'Access requires a Telegram @username, or your admin must invite you by numeric user id. Set a username in Telegram Settings → Username, then ask your administrator to add you.'
-      );
+      const owner = await getOwnerSoulUserIdForBotId(botId);
+      const hint = owner != null
+        ? 'Set a @username in Telegram Settings → Username, then ask the bot owner to approve you in their web portal.'
+        : 'Set a @username in Telegram Settings → Username, then ask your administrator to add you.';
+      await bot.sendMessage(chatId, `Access requires a Telegram @username. ${hint}`);
       return;
     }
     if (access === 'blocked') {
-      await bot.sendMessage(
-        chatId,
-        'You are not on the invite list. Ask your administrator to add your Telegram @username before you can use this bot.'
-      );
+      const owner = await getOwnerSoulUserIdForBotId(botId);
+      const text =
+        owner != null
+          ? 'Your access is pending. The bot owner must approve you in their web portal (Access tab) before you can chat.'
+          : 'You are not on the invite list. Ask your administrator to add your Telegram @username before you can use this bot.';
+      await bot.sendMessage(chatId, text);
       return;
     }
 
@@ -158,7 +162,7 @@ export async function createBot(token, index = 0) {
       return;
     }
 
-    const access = await touchTelegramUser(userId, q.from, '[callback]', rawUserId);
+    const access = await touchTelegramUser(userId, q.from, '[callback]', rawUserId, botId);
     if (access === 'blocked' || access === 'no_username') {
       await bot.answerCallbackQuery(qid, { text: 'Not invited' }).catch(() => {});
       return;

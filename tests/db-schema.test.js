@@ -18,5 +18,7 @@ describe('PostgreSQL schema file', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS llm_usage');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS audit_logs');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS user_records');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS user_telegram_bots');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS user_bot_access');
   });
 });

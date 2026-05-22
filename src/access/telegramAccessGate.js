@@ -4,14 +4,25 @@ import {
   touchAllowlistSeen,
   normalizeTelegramUsername,
 } from './telegramAllowlist.js';
+import { getOwnerSoulUserIdForBotId } from './userTelegramBots.js';
+import { gateUserOwnedBotAccess } from './userBotAccess.js';
 import { logger } from '../logger.js';
 
 /**
  * Invite-only gate for Telegram bot + web.
  * @param {number|null} [scopedSoulUserId] When set (bot), chat/soul use this id.
+ * @param {number|null} [botId] Telegram bot id from getMe — user-owned bots use per-owner access.
  * @returns {'approved'|'blocked'|'no_username'}
  */
-export async function gateTelegramAccess(from, messagePreview, scopedSoulUserId = null) {
+export async function gateTelegramAccess(from, messagePreview, scopedSoulUserId = null, botId = null) {
+  const bid = botId != null ? Number(botId) : null;
+  if (Number.isFinite(bid)) {
+    const owner = await getOwnerSoulUserIdForBotId(bid);
+    if (owner != null) {
+      return gateUserOwnedBotAccess(bid, from, messagePreview, scopedSoulUserId);
+    }
+  }
+
   const username = normalizeTelegramUsername(from?.username);
   const telegramUserId = from?.id != null ? Number(from.id) : null;
 

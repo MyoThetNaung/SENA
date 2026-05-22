@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { apiFetch } from '@/lib/api.js';
+import { apiFetch, apiJson } from '@/lib/api.js';
 import { redirectForRole } from '@/lib/auth-client';
 import { AuthLayout } from '@/components/auth-layout';
 
@@ -21,9 +21,11 @@ export default function LoginPage() {
 
   useEffect(() => {
     let cancelled = false;
+    const timeoutMs = 15000;
+    const opts = { signal: AbortSignal.timeout(timeoutMs) };
     (async () => {
       try {
-        const me = await apiFetch('/api/auth/me').then((r) => r.json());
+        const me = await apiJson('/api/auth/me', opts);
         if (cancelled) return;
         if (me.authenticated) {
           setSession(me);
@@ -32,7 +34,7 @@ export default function LoginPage() {
             return;
           }
         }
-        const cfg = await apiFetch('/api/auth/login-config').then((r) => r.json());
+        const cfg = await apiJson('/api/auth/login-config', opts);
         if (cancelled) return;
         setGoogleConfigured(Boolean(cfg.googleConfigured));
         setAdminTelegram(cfg.adminTelegram || null);
@@ -44,7 +46,10 @@ export default function LoginPage() {
           );
         }
       } catch (e) {
-        if (!cancelled) setError(e.message || String(e));
+        if (!cancelled) {
+          const msg = e?.name === 'TimeoutError' ? 'Sign-in timed out. Restart SENA and try again.' : e.message || String(e);
+          setError(msg);
+        }
       } finally {
         if (!cancelled) setBooting(false);
       }

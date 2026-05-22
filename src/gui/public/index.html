@@ -717,15 +717,9 @@
                 <label for="memBotSelect">Bot</label>
                 <select id="memBotSelect" class="chat-session-select" aria-label="Telegram bot"></select>
               </div>
-              <div class="session-select-wrap">
-                <div class="session-select-row">
-                  <label for="memSessionSelect">Session</label>
-                  <select id="memSessionSelect" class="chat-session-select"></select>
-                </div>
-              </div>
-              <div class="mem-timezone-wrap">
-                <label for="memUserTimezone">User timezone</label>
-                <select id="memUserTimezone" class="chat-session-select" aria-label="User timezone"></select>
+              <div class="mem-bot-select-wrap">
+                <label for="memSessionSelect">Session</label>
+                <select id="memSessionSelect" class="chat-session-select"></select>
               </div>
             </div>
           </div>
@@ -800,7 +794,11 @@
                   rows="6"
                   placeholder="Describe the assistant’s job, boundaries, and behavior (multiple lines)."
                 ></textarea>
-              
+              </div>
+              <div class="mem-span2">
+                <label>User timezone (this session)</label>
+                <select id="memBotUserTimezone" class="chat-session-select" aria-label="User timezone"></select>
+                <p class="hint">Used for “today”, calendar, and saved dates.</p>
               </div>
             </div>
             <div class="mem-actions mem-bot-actions">
@@ -829,6 +827,10 @@
               <div>
                 <label>Display name</label>
                 <input type="text" id="memDisplayName" placeholder="Name to use in replies" />
+              </div>
+              <div>
+                <label>Timezone</label>
+                <select id="memSessionTimezone" class="chat-session-select" aria-label="User timezone"></select>
               </div>
               <div>
                 <label>Gender</label>

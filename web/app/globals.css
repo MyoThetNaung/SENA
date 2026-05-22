@@ -134,15 +134,83 @@ body.sena-auth {
   }
 }
 
-/* Radix selects inside legacy panels */
+/* Form fields — match admin panel (.mem-grid inputs / selects) */
+.main .sena-field,
+.main .mem-grid .sena-field,
+.main .mem-grid input,
+.main .mem-grid select,
+.main .mem-grid textarea {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.9);
+  background: rgba(10, 13, 17, 0.45);
+  backdrop-filter: blur(var(--glass-blur-soft));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft));
+  color: #e8eaed;
+  font-family: inherit;
+  font-size: 0.9rem;
+  box-sizing: border-box;
+}
+
+.main .mem-grid select,
+.main select.sena-field {
+  cursor: pointer;
+}
+
+.main .sena-field:focus,
+.main .mem-grid input:focus,
+.main .mem-grid select:focus,
+.main .mem-grid textarea:focus {
+  outline: 2px solid #4d7cff;
+  border-color: #4d7cff;
+}
+
+.main input[type='month'].sena-field,
+.main input[type='date'].sena-field {
+  color-scheme: dark;
+}
+
+/* Radix selects inside user/admin Next panels */
 .main .sena-select-trigger {
   width: 100%;
   max-width: 100%;
   padding: 0.45rem 0.6rem;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid rgba(51, 65, 85, 0.9);
-  background: rgba(11, 15, 20, 0.48);
+  background: rgba(10, 13, 17, 0.45);
+  backdrop-filter: blur(var(--glass-blur-soft));
+  -webkit-backdrop-filter: blur(var(--glass-blur-soft));
   color: #e8eaed;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   text-align: left;
+  box-shadow: none;
+}
+
+.main .sena-select-trigger:focus,
+.main .sena-select-trigger[data-state='open'] {
+  outline: 2px solid #4d7cff;
+  border-color: #4d7cff;
+}
+
+/* Radix select menu is portaled to <body> — must not be scoped under .main */
+.sena-select-content {
+  z-index: 1400;
+  max-height: min(24rem, 60vh);
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgba(51, 65, 85, 0.95);
+  background: rgba(10, 13, 17, 0.98);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  color: #e8eaed;
+}
+
+.sena-select-item {
+  color: #e8eaed;
+}
+
+.sena-select-item[data-highlighted] {
+  background: rgba(77, 124, 255, 0.22);
+  color: #f1f5ff;
 }

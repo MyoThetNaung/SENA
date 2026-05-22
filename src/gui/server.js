@@ -34,7 +34,7 @@ import {
 import { clearAllStoredMemory } from '../memory/clearAllMemory.js';
 import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { resetDatabaseConnection, getPool, query } from '../db.js';
-import { listAllEvents, deleteEventById } from '../calendar/calendar.js';
+import { listAdminPanelEvents, deleteAdminPanelEvent } from '../calendar/calendar.js';
 import { deleteUserRecordById, listUserRecords } from '../records/userRecords.js';
 import { listAllPending, clearPending } from '../core/pending.js';
 import {
@@ -1175,7 +1175,7 @@ export function createApiApp() {
   app.get('/api/data/calendar', async (req, res) => {
     try {
       const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 400));
-      const rows = await listAllEvents(limit);
+      const rows = await listAdminPanelEvents(limit);
       res.json({ events: rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -1199,7 +1199,7 @@ export function createApiApp() {
         res.status(400).json({ ok: false, error: 'Valid event id is required.' });
         return;
       }
-      const ok = await deleteEventById(id);
+      const ok = await deleteAdminPanelEvent(id);
       if (!ok) {
         res.status(404).json({ ok: false, error: 'No event with that id.' });
         return;
