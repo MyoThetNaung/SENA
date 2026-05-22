@@ -2,6 +2,7 @@
  * Next.js custom server + Express API (`npm run gui` / `web/server.mjs`).
  */
 import { createServer } from 'http';
+import { spawnSync } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -32,13 +33,49 @@ function parseRequestUrl(reqUrl, hostHeader, port) {
 }
 
 /**
+ * Dev mode uses WebSocket HMR (webpack-hmr), which often fails on mobile browsers and
+ * remote DDNS/port-forward — pages can hang on "Loading…". Production uses plain HTTP only.
+ */
+export function resolveWebDevMode(options = {}) {
+  if (options.dev !== undefined) return Boolean(options.dev);
+  if (process.env.NODE_ENV === 'production') return false;
+
+  const flag = String(process.env.SENA_WEB_PRODUCTION ?? '').trim().toLowerCase();
+  if (flag === '1' || flag === 'true' || flag === 'yes') return false;
+  if (flag === '0' || flag === 'false' || flag === 'no') return true;
+
+  if (String(process.env.SENA_PUBLIC_ACCESS_URL || '').trim()) return false;
+
+  return true;
+}
+
+async function ensureNextProductionBuild(webDir, logger) {
+  const buildId = path.join(webDir, '.next', 'BUILD_ID');
+  try {
+    await fs.access(buildId);
+    return;
+  } catch {
+    logger.info('Next.js production build not found; building now (one-time, may take a minute)…');
+    const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const r = spawnSync(npm, ['run', 'build'], {
+      cwd: webDir,
+      stdio: 'inherit',
+      env: { ...process.env, NODE_ENV: 'production' },
+    });
+    if (r.status !== 0) {
+      throw new Error('Next.js production build failed. Run: npm run build --prefix web');
+    }
+  }
+}
+
+/**
  * @param {{ port?: number, host?: string, dev?: boolean }} [options]
- * @returns {Promise<{ server: import('http').Server, port: number, url: string }>}
+ * @returns {Promise<{ server: import('http').Server, port: number, url: string, dev: boolean }>}
  */
 export async function startSenaWebServer(options = {}) {
   if (started) return started;
 
-  const dev = options.dev ?? process.env.NODE_ENV !== 'production';
+  const dev = resolveWebDevMode(options);
   const port = Math.min(
     65535,
     Math.max(1024, Number(options.port ?? process.env.PORT ?? process.env.GUI_PORT) || 3000)
@@ -57,7 +94,12 @@ export async function startSenaWebServer(options = {}) {
   logger.info('Running auth init…');
   await initAuth();
 
-  logger.info('Starting Next.js…');
+  if (dev) {
+    logger.info('Starting Next.js (development — localhost hot reload; uses WebSocket HMR)…');
+  } else {
+    logger.info('Starting Next.js (production — HTTP only, stable for mobile and remote access)…');
+    await ensureNextProductionBuild(webDir, logger);
+  }
   // Keep Next runtime path resolution anchored to the web app directory.
   process.chdir(webDir);
   // Optional full clean (SENA_WEB_CLEAR_NEXT=1). Avoid wiping `.next` on every dev boot:
@@ -93,6 +135,6 @@ export async function startSenaWebServer(options = {}) {
   logger.info(`Admin panel: ${url}/admin.html`);
   logger.info(`User portal: ${url}/user.html`);
 
-  started = { server, port, url };
+  started = { server, port, url, dev };
   return started;
 }

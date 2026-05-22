@@ -21,6 +21,11 @@ import { attachSession } from './middleware.js';
 import { authLoginRateLimit } from './rateLimit.js';
 import { recordTelegramLoginHash, pruneTelegramLoginUsed } from './telegramLoginUsed.js';
 import {
+  storeGoogleOAuthState,
+  consumeGoogleOAuthState,
+  pruneGoogleOAuthStates,
+} from './googleOAuthState.js';
+import {
   isGoogleOAuthConfigured,
   buildGoogleAuthUrl,
   createOAuthState,
@@ -34,12 +39,41 @@ import { buildTelegramProfileUrl, normalizeTelegramHandle } from '../util/telegr
 
 const GOOGLE_STATE_COOKIE = 'sena_google_oauth_state';
 
-function oauthStateCookieOptions() {
-  const base = sessionCookieOptions();
+/** @param {import('express').Request} req */
+function oauthStateCookieOptions(req) {
+  const base = sessionCookieOptions(req);
   return { ...base, maxAge: 10 * 60 * 1000 };
 }
 
+/**
+ * Safari often drops Set-Cookie on 302; a short 200 page with client redirect is more reliable.
+ * @param {import('express').Response} res
+ * @param {import('express').Request} req
+ * @param {string} token
+ * @param {string} destination
+ */
+function finishBrowserLogin(res, req, token, destination) {
+  res.cookie(getSessionCookieName(), token, sessionCookieOptions(req));
+  res.setHeader('Cache-Control', 'no-store');
+  const dest = destination.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  res.status(200).type('html').send(`<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Signing in…</title>
+<meta http-equiv="refresh" content="0;url=${dest}">
+</head><body><p>Signing in… <a href="${dest}">Continue</a></p>
+<script>location.replace(${JSON.stringify(destination)});</script></body></html>`);
+}
+
 function requestOrigin(req) {
+  const { senaPublicAccessUrl } = getConfig();
+  const pub = String(senaPublicAccessUrl ?? '').trim();
+  if (pub) {
+    try {
+      const u = new URL(pub.includes('://') ? pub : `http://${pub}`);
+      return u.origin;
+    } catch {
+      /* fall through */
+    }
+  }
   const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
   return `${proto}://${host}`;
@@ -120,7 +154,8 @@ export function createAuthRouter() {
         return;
       }
       const state = createOAuthState();
-      res.cookie(GOOGLE_STATE_COOKIE, state, oauthStateCookieOptions());
+      await storeGoogleOAuthState(state);
+      res.cookie(GOOGLE_STATE_COOKIE, state, oauthStateCookieOptions(req));
       res.redirect(buildGoogleAuthUrl(req, state));
     } catch (e) {
       res.redirect(loginRedirect(req, { error: e.message || 'Could not start Google sign-in.' }));
@@ -128,7 +163,7 @@ export function createAuthRouter() {
   });
 
   router.get('/google/callback', authLoginRateLimit, async (req, res) => {
-    const clearState = () => res.clearCookie(GOOGLE_STATE_COOKIE, sessionClearCookieOptions());
+    const clearState = () => res.clearCookie(GOOGLE_STATE_COOKIE, sessionClearCookieOptions(req));
     try {
       reloadConfig();
       const err = String(req.query.error || '').trim();
@@ -140,8 +175,10 @@ export function createAuthRouter() {
 
       const state = String(req.query.state || '');
       const savedState = String(req.cookies?.[GOOGLE_STATE_COOKIE] || '');
+      const cookieOk = Boolean(state && savedState && state === savedState);
+      const dbOk = await consumeGoogleOAuthState(state);
       clearState();
-      if (!state || !savedState || state !== savedState) {
+      if (!state || (!cookieOk && !dbOk)) {
         res.redirect(loginRedirect(req, { error: 'Invalid sign-in state. Try again.' }));
         return;
       }
@@ -191,8 +228,7 @@ export function createAuthRouter() {
         soulUserId: activated.soulUserId,
       });
 
-      res.cookie(getSessionCookieName(), token, sessionCookieOptions());
-      res.redirect(appRedirect(req));
+      finishBrowserLogin(res, req, token, appRedirect(req));
     } catch (e) {
       clearState();
       res.redirect(loginRedirect(req, { error: e.message || 'Google sign-in failed.' }));
@@ -243,7 +279,7 @@ export function createAuthRouter() {
         telegramUserId: activated.telegramUserId,
       });
 
-      res.cookie(getSessionCookieName(), token, sessionCookieOptions());
+      res.cookie(getSessionCookieName(), token, sessionCookieOptions(req));
       res.json({
         ok: true,
         role: 'user',
@@ -265,7 +301,7 @@ export function createAuthRouter() {
         return;
       }
       const { token } = await createSession({ role: 'admin', adminId: admin.id });
-      res.cookie(getSessionCookieName(), token, sessionCookieOptions());
+      res.cookie(getSessionCookieName(), token, sessionCookieOptions(req));
       res.json({ ok: true, role: 'admin', email: admin.email });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -275,8 +311,8 @@ export function createAuthRouter() {
   router.post('/logout', async (req, res) => {
     try {
       if (req.sessionToken) await destroySession(req.sessionToken);
-      res.clearCookie(getSessionCookieName(), sessionClearCookieOptions());
-      res.clearCookie(GOOGLE_STATE_COOKIE, sessionClearCookieOptions());
+      res.clearCookie(getSessionCookieName(), sessionClearCookieOptions(req));
+      res.clearCookie(GOOGLE_STATE_COOKIE, sessionClearCookieOptions(req));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
@@ -289,4 +325,5 @@ export function createAuthRouter() {
 export async function initAuth() {
   await pruneExpiredSessions();
   await pruneTelegramLoginUsed();
+  await pruneGoogleOAuthStates();
 }

@@ -25,12 +25,25 @@ export function isGoogleOAuthConfigured() {
   return Boolean(googleClientId && googleClientSecret);
 }
 
+function redirectUriFromPublicAccessUrl(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return null;
+  try {
+    const u = new URL(s.includes('://') ? s : `http://${s}`);
+    return `${u.origin}/api/auth/google/callback`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * @param {import('express').Request} req
  */
 export function resolveGoogleRedirectUri(req) {
-  const { googleRedirectUri } = getConfig();
+  const { googleRedirectUri, senaPublicAccessUrl } = getConfig();
   if (googleRedirectUri) return googleRedirectUri;
+  const fromEnv = redirectUriFromPublicAccessUrl(senaPublicAccessUrl);
+  if (fromEnv) return fromEnv;
   const proto = (req.get('x-forwarded-proto') || req.protocol || 'http').split(',')[0].trim();
   const host = (req.get('x-forwarded-host') || req.get('host') || '').split(',')[0].trim();
   return `${proto}://${host}/api/auth/google/callback`;

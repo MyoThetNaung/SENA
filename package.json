@@ -11,6 +11,8 @@
     "start": "node src/index.js",
     "gui": "node src/gui-main.js",
     "gui:web": "node src/gui-main.js",
+    "gui:prod": "npm run build --prefix web && node scripts/run-gui-prod.js",
+    "web:build": "npm run build --prefix web",
     "web:dev": "node web/server.mjs",
     "worker": "node src/index.js",
     "dev": "node --watch src/index.js",

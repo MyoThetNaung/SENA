@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { query } from '../db.js';
+import { getConfig } from '../config.js';
 
 const SESSION_DAYS = 14;
 const COOKIE_NAME = 'sena_session';
@@ -8,24 +9,60 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function publicAccessProtocol() {
+  const pub = String(getConfig().senaPublicAccessUrl ?? process.env.SENA_PUBLIC_ACCESS_URL ?? '').trim();
+  if (!pub) return null;
+  try {
+    return new URL(pub.includes('://') ? pub : `http://${pub}`).protocol;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether session cookies should use the Secure flag.
+ * Do not tie this to NODE_ENV alone — production Next builds often run on plain HTTP (DDNS/LAN).
+ * @param {import('express').Request} [req]
+ */
+export function isHttpsContext(req) {
+  const forced = String(process.env.SESSION_SECURE ?? '').trim();
+  if (forced === '1') return true;
+  if (forced === '0') return false;
+
+  const fromConfig = publicAccessProtocol();
+  if (fromConfig === 'https:') return true;
+  if (fromConfig === 'http:') return false;
+
+  if (req) {
+    const proto = String(req.get('x-forwarded-proto') || req.protocol || 'http')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
+    if (proto === 'https') return true;
+    if (proto === 'http') return false;
+  }
+
+  return false;
+}
+
 export function getSessionCookieName() {
   return COOKIE_NAME;
 }
 
-export function sessionCookieOptions() {
-  const secure = process.env.NODE_ENV === 'production' || process.env.SESSION_SECURE === '1';
+/** @param {import('express').Request} [req] */
+export function sessionCookieOptions(req) {
   return {
     httpOnly: true,
-    secure,
+    secure: isHttpsContext(req),
     sameSite: 'lax',
     maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
     path: '/',
   };
 }
 
-/** Options for `clearCookie` — must match attributes used when the cookie was set. */
-export function sessionClearCookieOptions() {
-  const { httpOnly, secure, sameSite, path } = sessionCookieOptions();
+/** @param {import('express').Request} [req] */
+export function sessionClearCookieOptions(req) {
+  const { httpOnly, secure, sameSite, path } = sessionCookieOptions(req);
   return { httpOnly, secure, sameSite, path };
 }
 

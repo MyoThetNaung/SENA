@@ -153,6 +153,9 @@ function buildConfig() {
   const googleRedirectUri = String(
     settings.googleRedirectUri ?? process.env.GOOGLE_REDIRECT_URI ?? ''
   ).trim();
+  const senaPublicAccessUrl = String(
+    settings.senaPublicAccessUrl ?? process.env.SENA_PUBLIC_ACCESS_URL ?? ''
+  ).trim();
   const adminTelegramUsername = String(
     settings.adminTelegramUsername ??
       process.env.SENA_ADMIN_TELEGRAM ??
@@ -230,6 +233,7 @@ function buildConfig() {
     googleClientId,
     googleClientSecret,
     googleRedirectUri,
+    senaPublicAccessUrl,
     adminTelegramUsername,
     modelsDir,
     ggufPath,

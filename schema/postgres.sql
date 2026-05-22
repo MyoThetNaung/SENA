@@ -179,6 +179,14 @@ CREATE TABLE IF NOT EXISTS telegram_login_used (
 
 CREATE INDEX IF NOT EXISTS idx_telegram_login_used_at ON telegram_login_used (used_at);
 
+-- Google OAuth CSRF state (one-time; survives mobile Safari when cookies do not)
+CREATE TABLE IF NOT EXISTS google_oauth_states (
+  state_hash TEXT PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now()))
+);
+
+CREATE INDEX IF NOT EXISTS idx_google_oauth_states_created ON google_oauth_states (created_at);
+
 -- Per web-login user: own Telegram bot token(s) and who may chat on each bot
 CREATE TABLE IF NOT EXISTS user_telegram_bots (
   id BIGSERIAL PRIMARY KEY,

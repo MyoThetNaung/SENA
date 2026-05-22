@@ -2,33 +2,39 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api.js';
-import { useHydrated } from '@/lib/useHydrated.js';
 import { AuthLayout } from '@/components/auth-layout';
 
 export default function AdminLoginPage() {
-  const router = useRouter();
-  const hydrated = useHydrated();
   const [error, setError] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loggedIn, setLoggedIn] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     apiFetch('/api/auth/me')
       .then((r) => r.json())
       .then((me) => {
+        if (cancelled) return;
         if (me.authenticated && me.role === 'admin') {
           setLoggedIn(true);
         }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSessionChecked(true);
       });
-  }, [router]);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function logout() {
     await apiFetch('/api/auth/logout', { method: 'POST' });
     setLoggedIn(false);
-    router.refresh();
+    setSessionChecked(true);
   }
 
   async function onSubmit(ev) {
@@ -48,15 +54,9 @@ export default function AdminLoginPage() {
     }
   }
 
-  const showLoggedIn = hydrated && loggedIn;
-
   return (
     <AuthLayout title="SENA Admin" description="Sign in with the administrator email and password.">
-      {!hydrated ? (
-        <p className="hint" style={{ textAlign: 'center' }}>
-          Loading…
-        </p>
-      ) : showLoggedIn ? (
+      {sessionChecked && loggedIn ? (
         <div className="space-y-4 text-center">
           <p className="hint">You are already signed in as admin.</p>
           <div className="flex flex-wrap items-center justify-center gap-3">
@@ -70,7 +70,7 @@ export default function AdminLoginPage() {
         </div>
       ) : (
         <>
-          <form onSubmit={onSubmit} className="flex flex-col gap-5">
+          <form onSubmit={onSubmit} className="flex flex-col gap-5" suppressHydrationWarning>
             <div className="space-y-2">
               <label htmlFor="email" className="text-slate-200">
                 Email
@@ -83,6 +83,7 @@ export default function AdminLoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                suppressHydrationWarning
               />
             </div>
             <div className="space-y-2">
@@ -97,6 +98,7 @@ export default function AdminLoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                suppressHydrationWarning
               />
             </div>
             <button type="submit" className="primary mt-2">
