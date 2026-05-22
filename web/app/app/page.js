@@ -45,10 +45,12 @@ export default function UserOverviewPage() {
   const [clock, setClock] = useState('');
   const [tz, setTz] = useState('Asia/Rangoon');
   const [activityLog, setActivityLog] = useState('');
-  const [usageMonth, setUsageMonth] = useState(() => {
+  const [usageMonth, setUsageMonth] = useState('');
+
+  useEffect(() => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+    setUsageMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  }, []);
 
   const loadActivityLog = useCallback(async (timeZone) => {
     const r = await apiFetch('/api/user/activity-log?limit=80');
@@ -59,6 +61,7 @@ export default function UserOverviewPage() {
   }, []);
 
   useEffect(() => {
+    if (!usageMonth) return;
     apiFetch(`/api/user/overview?month=${encodeURIComponent(usageMonth)}`)
       .then((r) => r.json())
       .then((o) => {
@@ -136,6 +139,7 @@ export default function UserOverviewPage() {
               onChange={(e) => setUsageMonth(e.target.value)}
               min="2000-01"
               max="2100-12"
+              suppressHydrationWarning
             />
           </div>
           {data?.tokenUsage ? (

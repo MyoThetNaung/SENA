@@ -52,7 +52,11 @@ export default function AdminLoginPage() {
 
   return (
     <AuthLayout title="SENA Admin" description="Sign in with the administrator email and password.">
-      {showLoggedIn ? (
+      {!hydrated ? (
+        <p className="hint" style={{ textAlign: 'center' }}>
+          Loading…
+        </p>
+      ) : showLoggedIn ? (
         <div className="space-y-4 text-center">
           <p className="hint">You are already signed in as admin.</p>
           <div className="flex flex-wrap items-center justify-center gap-3">
@@ -64,47 +68,47 @@ export default function AdminLoginPage() {
             </button>
           </div>
         </div>
-      ) : null}
-      <form
-        onSubmit={onSubmit}
-        className={`flex flex-col gap-5 ${showLoggedIn ? 'hidden' : ''}`}
-      >
-        <div className="space-y-2">
-          <label htmlFor="email" className="text-slate-200">
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            autoComplete="username"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <label htmlFor="password" className="text-slate-200">
-            Password
-          </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            placeholder="Enter your password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
-        <button type="submit" className="primary mt-2">
-          Sign in
-        </button>
-      </form>
-      {error ? <p className="auth-error">{error}</p> : null}
-      <p className="auth-links !mt-0 text-center">
-        <Link href="/login">User sign in (Google)</Link>
-      </p>
+      ) : (
+        <>
+          <form onSubmit={onSubmit} className="flex flex-col gap-5">
+            <div className="space-y-2">
+              <label htmlFor="email" className="text-slate-200">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="username"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="password" className="text-slate-200">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            <button type="submit" className="primary mt-2">
+              Sign in
+            </button>
+          </form>
+          {error ? <p className="auth-error">{error}</p> : null}
+          <p className="auth-links !mt-0 text-center">
+            <Link href="/login">User sign in (Google)</Link>
+          </p>
+        </>
+      )}
     </AuthLayout>
   );
 }

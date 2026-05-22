@@ -14,7 +14,9 @@ export function AuthLayout({ title, description, children }) {
       <div className="sena-auth-card">
         <h1 className="sena-auth-title">{title}</h1>
         {description ? <div className="auth-lead">{description}</div> : null}
-        <div className="sena-auth-content">{children}</div>
+        <div className="sena-auth-content" suppressHydrationWarning>
+          {children}
+        </div>
       </div>
     </div>
   );

@@ -43,9 +43,11 @@ export function NeuralBackgroundToggle({ id: idProp, className = '' }) {
   const autoId = useId();
   const inputId = idProp || `neuralBgToggle${autoId.replace(/:/g, '')}`;
   const [enabled, setEnabled] = useState(true);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setEnabled(readNeuralBackgroundEnabled());
+    setMounted(true);
     const sync = () => setEnabled(readNeuralBackgroundEnabled());
     window.addEventListener('sena-neural-bg', sync);
     return () => window.removeEventListener('sena-neural-bg', sync);
@@ -67,7 +69,8 @@ export function NeuralBackgroundToggle({ id: idProp, className = '' }) {
         id={inputId}
         type="checkbox"
         aria-label="Neural background"
-        checked={enabled}
+        suppressHydrationWarning
+        checked={mounted ? enabled : true}
         onChange={onChange}
       />
       <label className="neo-toggle" htmlFor={inputId}>

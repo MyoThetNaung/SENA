@@ -5,7 +5,6 @@ import { apiJson, escapeHtml } from '@/lib/api.js';
 import { PageSection } from '@/components/page-section';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 
 const WEB_BOT_KEY = 'web';
 
@@ -270,22 +269,38 @@ export default function UserChatPage() {
             </div>
             {!readOnlyTelegram ? (
               <div className="chat-messenger-compose">
-                <Textarea
-                  className="chat-messenger-input"
-                  rows={2}
-                  placeholder="Type a message…"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                />
-                <Button type="button" className="chat-messenger-send" onClick={send} disabled={!sessionUserId}>
-                  Send
-                </Button>
+                <div className="chat-messenger-input-place">
+                  <textarea
+                    className="chat-messenger-input"
+                    rows={2}
+                    placeholder="Type a message…"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="chat-messenger-send"
+                    onClick={send}
+                    disabled={!sessionUserId}
+                    aria-label="Send message"
+                  >
+                    <svg
+                      className="chat-messenger-send-icon"
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 512 512"
+                      aria-hidden="true"
+                    >
+                      <path d="M481.508,210.336L68.414,38.926c-17.403-7.222-37.064-4.045-51.309,8.287C2.86,59.547-3.098,78.551,1.558,96.808 L38.327,241h180.026c8.284,0,15.001,6.716,15.001,15.001c0,8.284-6.716,15.001-15.001,15.001H38.327L1.558,415.193 c-4.656,18.258,1.301,37.262,15.547,49.595c14.274,12.357,33.937,15.495,51.31,8.287l413.094-171.409 C500.317,293.862,512,276.364,512,256.001C512,235.638,500.317,218.139,481.508,210.336z" />
+                    </svg>
+                    <span className="chat-messenger-send-label">Send</span>
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>

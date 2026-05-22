@@ -1,13 +1,18 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/api.js';
 import { activeNavItem, isNavItemActive } from '@/lib/nav-active.js';
-import { ScrollIndicator } from '@/components/scroll-indicator';
 import { NeuralBackgroundToggle } from '@/components/neural-background-toggle';
 import { UserSidebarBottom } from '@/components/user-sidebar-bottom';
+
+const ScrollIndicator = dynamic(
+  () => import('@/components/scroll-indicator').then((m) => m.ScrollIndicator),
+  { ssr: false }
+);
 
 function currentNavLabel(pathname, navItems) {
   return activeNavItem(pathname, navItems)?.label || 'SENA';
