@@ -614,6 +614,14 @@ document.addEventListener('keydown', (ev) => {
     initNeuralBackground(document.getElementById('network'));
     initScrollIndicator();
     const auth = await apiFetch('/api/auth/me').then((r) => r.json());
+    if (auth.accountDisabled) {
+      document.body.innerHTML =
+        '<div style="max-width:28rem;margin:4rem auto;padding:2rem;text-align:center;font-family:system-ui,sans-serif">' +
+        '<h1>Account disabled</h1>' +
+        '<p>Your account has been disabled. Please contact your administrator for help.</p>' +
+        '<p><a href="/login">Back to sign in</a></p></div>';
+      return;
+    }
     if (!auth.authenticated || auth.role !== 'user') {
       location.href = '/login';
       return;

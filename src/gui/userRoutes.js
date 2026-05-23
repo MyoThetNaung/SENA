@@ -12,7 +12,11 @@ import { scheduleMemorySummaryRefresh } from '../memory/conversationSummary.js';
 import { getPool, query } from '../db.js';
 import { listEventsForOwner, deleteEventForOwner } from '../calendar/calendar.js';
 import { deleteUserRecordById, listUserRecords } from '../records/userRecords.js';
-import { getAllowlistBySoulUserId } from '../access/telegramAllowlist.js';
+import {
+  checkSoulUserAllowlist,
+  getAllowlistBySoulUserId,
+  respondAccountDisabled,
+} from '../access/telegramAllowlist.js';
 import {
   listUserMemoryBots,
   listUserMemorySessions,
@@ -85,6 +89,11 @@ export function createUserRouter() {
       req.session = token ? await getSessionByToken(token) : null;
       if (req.session?.role !== 'user' || !Number.isFinite(req.session.soulUserId)) {
         res.status(401).json({ ok: false, error: 'User login required' });
+        return;
+      }
+      const allow = await checkSoulUserAllowlist(req.session.soulUserId);
+      if (!allow.allowed) {
+        respondAccountDisabled(res);
         return;
       }
       next();

@@ -5,7 +5,7 @@ export const SCOPED_USER_ID_OFFSET = 1_000_000_000_000;
 
 /**
  * Invite-only access check (admin must add @username or user id first).
- * @returns {'approved'|'blocked'|'no_username'}
+ * @returns {'approved'|'blocked'|'disabled'|'no_username'}
  */
 export async function touchTelegramUser(userId, from, messagePreview, rawTelegramUserId = null, botId = null) {
   void rawTelegramUserId;

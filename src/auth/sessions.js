@@ -97,6 +97,16 @@ export async function destroySession(token) {
   await query('DELETE FROM web_sessions WHERE token_hash = $1', [hashToken(token)]);
 }
 
+/** End all browser sessions for a portal user (e.g. when admin disables them). */
+export async function destroySessionsForSoulUser(soulUserId) {
+  const uid = Number(soulUserId);
+  if (!Number.isFinite(uid)) return;
+  await query(
+    `DELETE FROM web_sessions WHERE role = 'user' AND soul_user_id = $1`,
+    [uid]
+  );
+}
+
 export async function getSessionByToken(token) {
   if (!token) return null;
   const r = await query(

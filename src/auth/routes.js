@@ -3,9 +3,11 @@ import { reloadConfig } from '../config.js';
 import {
   checkTelegramAllowlist,
   checkGoogleAllowlist,
+  checkSoulUserAllowlist,
   activateAllowlistUser,
   activateGoogleAllowlistUser,
   normalizeTelegramUsername,
+  ACCOUNT_DISABLED_MESSAGE,
 } from '../access/telegramAllowlist.js';
 import { verifyTelegramLoginPayload, getTelegramLoginBotToken } from './telegramLogin.js';
 import { verifyAdminPassword } from './adminUsers.js';
@@ -115,6 +117,19 @@ export function createAuthRouter() {
         res.json({ authenticated: false });
         return;
       }
+      if (req.session.role === 'user' && Number.isFinite(req.session.soulUserId)) {
+        const allow = await checkSoulUserAllowlist(req.session.soulUserId);
+        if (!allow.allowed) {
+          if (req.sessionToken) await destroySession(req.sessionToken);
+          res.clearCookie(getSessionCookieName(), sessionClearCookieOptions(req));
+          res.json({
+            authenticated: false,
+            accountDisabled: true,
+            message: ACCOUNT_DISABLED_MESSAGE,
+          });
+          return;
+        }
+      }
       res.json({
         authenticated: true,
         role: req.session.role,
@@ -210,7 +225,7 @@ export function createAuthRouter() {
       if (!check.allowed) {
         const msg =
           check.reason === 'disabled'
-            ? 'Your account has been disabled.'
+            ? ACCOUNT_DISABLED_MESSAGE
             : 'This Google account is not registered. Ask your administrator to invite your email first.';
         res.redirect(loginRedirect(req, { error: msg }));
         return;
@@ -258,9 +273,11 @@ export function createAuthRouter() {
       const check = await checkTelegramAllowlist({ username, telegramUserId: user.id });
       if (!check.allowed) {
         const msg =
-          check.reason === 'no_username'
-            ? 'Your Telegram account has no @username. Set one in Telegram Settings, or ask admin to add your numeric user id.'
-            : 'This Telegram account is not registered. Ask your administrator to add your @username first.';
+          check.reason === 'disabled'
+            ? ACCOUNT_DISABLED_MESSAGE
+            : check.reason === 'no_username'
+              ? 'Your Telegram account has no @username. Set one in Telegram Settings, or ask admin to add your numeric user id.'
+              : 'This Telegram account is not registered. Ask your administrator to add your @username first.';
         res.status(403).json({ ok: false, error: msg, code: check.reason });
         return;
       }

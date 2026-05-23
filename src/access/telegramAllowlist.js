@@ -5,6 +5,36 @@ import {
   normalizeGoogleEmail,
   soulUserIdFromGoogleSub,
 } from '../auth/googleOAuth.js';
+import { destroySessionsForSoulUser } from '../auth/sessions.js';
+
+export const ACCOUNT_DISABLED_MESSAGE =
+  'Your account has been disabled. Please contact your administrator for help.';
+
+/** @param {import('express').Response} res */
+export function respondAccountDisabled(res) {
+  res.status(403).json({
+    ok: false,
+    error: ACCOUNT_DISABLED_MESSAGE,
+    code: 'account_disabled',
+  });
+}
+
+/**
+ * @param {number} soulUserId
+ * @returns {Promise<{ allowed: boolean, row: object|null, reason?: string }>}
+ */
+function allowlistStatus(row) {
+  return String(row?.status ?? '').trim().toLowerCase();
+}
+
+export async function checkSoulUserAllowlist(soulUserId) {
+  const row = await getAllowlistBySoulUserId(soulUserId);
+  if (!row) return { allowed: true, row: null };
+  if (allowlistStatus(row) === 'disabled') {
+    return { allowed: false, row, reason: 'disabled' };
+  }
+  return { allowed: true, row };
+}
 
 /** @param {string|null|undefined} raw */
 export function normalizeTelegramUsername(raw) {
@@ -13,6 +43,40 @@ export function normalizeTelegramUsername(raw) {
     .replace(/^@+/, '')
     .toLowerCase();
   return s || null;
+}
+
+/**
+ * All allowlist rows matching a Telegram messenger (any status).
+ * @param {{ username?: string|null, telegramUserId?: number|null }} identity
+ */
+export async function findAllowlistRowsForTelegramIdentity(identity) {
+  const username = normalizeTelegramUsername(identity.username);
+  const tid =
+    identity.telegramUserId != null && Number.isFinite(Number(identity.telegramUserId))
+      ? Number(identity.telegramUserId)
+      : null;
+
+  const clauses = [];
+  const params = [];
+  let n = 1;
+  if (tid != null) {
+    clauses.push(`telegram_user_id = $${n++}`);
+    params.push(tid);
+    clauses.push(`soul_user_id = $${n++}`);
+    params.push(tid);
+  }
+  if (username) {
+    clauses.push(`LOWER(username) = $${n++}`);
+    params.push(username);
+  }
+  if (!clauses.length) return [];
+
+  const r = await query(
+    `SELECT * FROM telegram_allowlist WHERE ${clauses.join(' OR ')}
+     ORDER BY last_seen DESC NULLS LAST, id DESC`,
+    params
+  );
+  return r.rows;
 }
 
 /**
@@ -26,35 +90,40 @@ export async function checkTelegramAllowlist(identity) {
       ? Number(identity.telegramUserId)
       : null;
 
-  let row = null;
-  if (tid != null) {
-    const r = await query(
-      `SELECT * FROM telegram_allowlist WHERE telegram_user_id = $1 AND status <> 'disabled'`,
-      [tid]
-    );
-    row = r.rows[0] || null;
-  }
-  if (!row && username) {
-    const r = await query(
-      `SELECT * FROM telegram_allowlist WHERE LOWER(username) = $1 AND status <> 'disabled'`,
-      [username]
-    );
-    row = r.rows[0] || null;
+  const rows = await findAllowlistRowsForTelegramIdentity(identity);
+  const disabledRow = rows.find((r) => allowlistStatus(r) === 'disabled');
+  if (disabledRow) {
+    return { allowed: false, row: disabledRow, reason: 'disabled' };
   }
 
-  if (!row) {
+  for (const row of rows) {
+    const soulId =
+      row.soul_user_id != null && Number.isFinite(Number(row.soul_user_id))
+        ? Number(row.soul_user_id)
+        : null;
+    if (soulId != null) {
+      const soulCheck = await checkSoulUserAllowlist(soulId);
+      if (!soulCheck.allowed && soulCheck.reason === 'disabled') {
+        return { allowed: false, row: soulCheck.row ?? row, reason: 'disabled' };
+      }
+    }
+  }
+
+  const activeRow = rows.find(
+    (r) => allowlistStatus(r) === 'active' || allowlistStatus(r) === 'invited'
+  );
+  if (activeRow) {
+    return { allowed: true, row: activeRow };
+  }
+
+  if (!rows.length) {
     return {
       allowed: false,
       row: null,
-      reason: username
-        ? 'not_invited'
-        : 'no_username',
+      reason: username || tid != null ? 'not_invited' : 'no_username',
     };
   }
-  if (row.status === 'disabled') {
-    return { allowed: false, row, reason: 'disabled' };
-  }
-  return { allowed: true, row };
+  return { allowed: false, row: null, reason: 'not_invited' };
 }
 
 /**
@@ -81,10 +150,19 @@ export async function checkGoogleAllowlist(identity) {
   }
 
   if (!row) {
+    let disabledRow = null;
+    if (sub) {
+      const r = await query(`SELECT * FROM telegram_allowlist WHERE google_sub = $1`, [sub]);
+      disabledRow = r.rows[0] || null;
+    }
+    if (!disabledRow && email) {
+      const r = await query(`SELECT * FROM telegram_allowlist WHERE LOWER(email) = $1`, [email]);
+      disabledRow = r.rows[0] || null;
+    }
+    if (disabledRow?.status === 'disabled') {
+      return { allowed: false, row: disabledRow, reason: 'disabled' };
+    }
     return { allowed: false, row: null, reason: 'not_invited' };
-  }
-  if (row.status === 'disabled') {
-    return { allowed: false, row, reason: 'disabled' };
   }
   return { allowed: true, row };
 }
@@ -139,12 +217,24 @@ export async function activateAllowlistUser(row, telegramUser, soulUserIdOverrid
   const tid = Number(telegramUser.id);
   if (!Number.isFinite(tid)) throw new Error('Invalid Telegram user id');
 
-  let soulUserId =
+  const fresh = await query(`SELECT status FROM telegram_allowlist WHERE id = $1`, [row.id]);
+  if (allowlistStatus(fresh.rows[0]) === 'disabled' || allowlistStatus(row) === 'disabled') {
+    throw new Error(ACCOUNT_DISABLED_MESSAGE);
+  }
+
+  const SCOPED_USER_ID_OFFSET = 1_000_000_000_000;
+  const override =
     soulUserIdOverride != null && Number.isFinite(Number(soulUserIdOverride))
       ? Number(soulUserIdOverride)
-      : row.soul_user_id != null
-        ? Number(row.soul_user_id)
-        : null;
+      : null;
+  const useOverride =
+    override != null && override > 0 && override < SCOPED_USER_ID_OFFSET ? override : null;
+
+  let soulUserId =
+    useOverride ??
+    (row.soul_user_id != null && Number.isFinite(Number(row.soul_user_id))
+      ? Number(row.soul_user_id)
+      : null);
   if (!Number.isFinite(soulUserId)) {
     soulUserId = tid;
   }
@@ -277,7 +367,33 @@ export async function setAllowlistStatus(id, status) {
   if (!Number.isFinite(sid)) throw new Error('Invalid id');
   const s = ['invited', 'active', 'disabled'].includes(status) ? status : null;
   if (!s) throw new Error('status must be invited, active, or disabled');
+  const prev = await query(
+    `SELECT soul_user_id, telegram_user_id FROM telegram_allowlist WHERE id = $1`,
+    [sid]
+  );
   await query(`UPDATE telegram_allowlist SET status = $1 WHERE id = $2`, [s, sid]);
+  if (s === 'disabled') {
+    const soulUserId =
+      prev.rows[0]?.soul_user_id != null && Number.isFinite(Number(prev.rows[0].soul_user_id))
+        ? Number(prev.rows[0].soul_user_id)
+        : null;
+    const telegramUserId =
+      prev.rows[0]?.telegram_user_id != null &&
+      Number.isFinite(Number(prev.rows[0].telegram_user_id))
+        ? Number(prev.rows[0].telegram_user_id)
+        : null;
+    if (soulUserId != null) {
+      await destroySessionsForSoulUser(soulUserId);
+      await query(`UPDATE telegram_users SET status = 'blocked' WHERE user_id = $1`, [soulUserId]);
+    }
+    if (telegramUserId != null) {
+      await query(
+        `UPDATE user_bot_access SET status = 'blocked'
+         WHERE telegram_user_id = $1 AND status = 'approved'`,
+        [telegramUserId]
+      );
+    }
+  }
 }
 
 export async function updateAllowlistEntry(id, patch) {

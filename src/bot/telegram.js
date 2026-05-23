@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { resolveScopedTelegramUserId, touchTelegramUser } from '../access/telegramAccess.js';
 import { getOwnerSoulUserIdForBotId } from '../access/userTelegramBots.js';
+import { ACCOUNT_DISABLED_MESSAGE } from '../access/telegramAllowlist.js';
 import { appendChatMessage } from '../chat/chatLog.js';
 import { getConfig } from '../config.js';
 import { handleConfirmCallback, handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
@@ -79,6 +80,10 @@ export async function createBot(token, index = 0) {
         ? 'Set a @username in Telegram Settings → Username, then ask the bot owner to approve you in their web portal.'
         : 'Set a @username in Telegram Settings → Username, then ask your administrator to add you.';
       await bot.sendMessage(chatId, `Access requires a Telegram @username. ${hint}`);
+      return;
+    }
+    if (access === 'disabled') {
+      await bot.sendMessage(chatId, ACCOUNT_DISABLED_MESSAGE);
       return;
     }
     if (access === 'blocked') {
@@ -163,6 +168,10 @@ export async function createBot(token, index = 0) {
     }
 
     const access = await touchTelegramUser(userId, q.from, '[callback]', rawUserId, botId);
+    if (access === 'disabled') {
+      await bot.answerCallbackQuery(qid, { text: 'Account disabled' }).catch(() => {});
+      return;
+    }
     if (access === 'blocked' || access === 'no_username') {
       await bot.answerCallbackQuery(qid, { text: 'Not invited' }).catch(() => {});
       return;

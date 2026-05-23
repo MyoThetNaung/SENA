@@ -1,11 +1,16 @@
 import { query } from '../db.js';
-import { getAllowlistBySoulUserId, normalizeTelegramUsername } from './telegramAllowlist.js';
+import {
+  checkTelegramAllowlist,
+  checkSoulUserAllowlist,
+  getAllowlistBySoulUserId,
+  normalizeTelegramUsername,
+} from './telegramAllowlist.js';
 import { getOwnerSoulUserIdForBotId } from './userTelegramBots.js';
 import { syncDisplayNameToSoul } from './telegramAccess.js';
 
 /**
  * Access gate for bots registered to a web user (not global admin allowlist).
- * @returns {'approved'|'blocked'|'no_username'}
+ * @returns {'approved'|'blocked'|'disabled'|'no_username'}
  */
 export async function gateUserOwnedBotAccess(botId, from, messagePreview, scopedSoulUserId) {
   const ownerSoulUserId = await getOwnerSoulUserIdForBotId(botId);
@@ -19,12 +24,24 @@ export async function gateUserOwnedBotAccess(botId, from, messagePreview, scoped
     return 'no_username';
   }
 
+  const userCheck = await checkTelegramAllowlist({ username, telegramUserId });
+  if (!userCheck.allowed && userCheck.reason === 'disabled') {
+    return 'disabled';
+  }
+
   const ownerAllow = await getAllowlistBySoulUserId(ownerSoulUserId);
+  if (ownerAllow?.status === 'disabled') {
+    return 'disabled';
+  }
   const ownerTid =
     ownerAllow?.telegram_user_id != null && Number.isFinite(Number(ownerAllow.telegram_user_id))
       ? Number(ownerAllow.telegram_user_id)
       : null;
   if (ownerTid != null && Number.isFinite(telegramUserId) && ownerTid === telegramUserId) {
+    const ownerSoulCheck = await checkSoulUserAllowlist(ownerSoulUserId);
+    if (!ownerSoulCheck.allowed) {
+      return 'disabled';
+    }
     await upsertUserBotAccess({
       ownerSoulUserId,
       botId,
@@ -46,6 +63,10 @@ export async function gateUserOwnedBotAccess(botId, from, messagePreview, scoped
   const row = existing.rows[0];
 
   if (row?.status === 'approved') {
+    const recheck = await checkTelegramAllowlist({ username, telegramUserId });
+    if (!recheck.allowed && recheck.reason === 'disabled') {
+      return 'disabled';
+    }
     await touchUserBotAccessRow(Number(row.id), { username, firstName: from?.first_name });
     await syncDisplayNameToSoul(scopedId);
     return 'approved';
