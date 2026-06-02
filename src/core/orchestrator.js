@@ -25,7 +25,13 @@ import { listChatMessages } from '../chat/chatLog.js';
 import { decideIntent } from './intent.js';
 import { formatSoulForPrompt, getSoul, ensureSoul } from '../memory/soul.js';
 import { searchAndSummarize } from '../tools/browser.js';
-import { clearPending, getPending } from './pending.js';
+import { clearPending, getPending, setPending } from './pending.js';
+import { runAgent, runConfirmedTool } from './agentRunner.js';
+import { providerSupportsTools } from '../llm/chatWithTools.js';
+import { previewCalendarAddEvent } from '../tools/handlers/calendarTools.js';
+import { previewWebSearch } from '../tools/handlers/webSearchTool.js';
+import { retrieveContext } from '../rag/retrieve.js';
+import { embeddingsConfigured } from '../rag/embeddings.js';
 import { logger } from '../logger.js';
 import { getConfig } from '../config.js';
 
@@ -202,13 +208,28 @@ async function buildMessages(userId, userText, options = {}) {
           ? `\n\n---\nPre-calculated net quantity (sum of qty for each product title; purchase + sale rows only):\n${invNet}`
           : '');
   }
+  let knowledgeSection = '';
+  const cfg = getConfig();
+  if (cfg.ragAutoInject && cfg.ragEnabled && embeddingsConfigured()) {
+    try {
+      const retrieval = await retrieveContext(userId, userText, { limit: cfg.ragTopK || 8 });
+      if (retrieval.contextText && retrieval.chunks?.length) {
+        knowledgeSection =
+          `\n\n---\nInternal knowledge (retrieved for this message; cite sources when used):\n${retrieval.contextText}`;
+      }
+    } catch (e) {
+      logger.warn(`ragAutoInject: ${e.message}`);
+    }
+  }
+
   const system =
     `${await baseSystemPrompt(userId)}\n\n---\n` +
     `This request includes prior turns of this chat (user and assistant, oldest to newest) after the system block. ` +
     `Use them for follow-ups (e.g. "share the detail list", "same month", "break that down") without asking the user to repeat the whole topic.\n\n---\n` +
     `Keep replies concise by default (about 4-8 lines) and expand only when the user asks for details.\n\n---\n` +
     `User memory (Soul ID):\n${memoryBlock}` +
-    (recordsSection ? `\n\n---\n${recordsSection}` : '');
+    (recordsSection ? `\n\n---\n${recordsSection}` : '') +
+    knowledgeSection;
 
   const messages = [{ role: 'system', content: system }];
   const rows = await listChatMessages({ userId, limit: pickChatHistoryLimit(userText) });
@@ -463,13 +484,9 @@ async function handleCalendar(userId, text) {
       return 'The event time was not valid. Please rephrase with a clear date/time.';
     }
     starts = d.toISOString();
-    try {
-      const ev = await addEvent(userId, starts, title);
-      const when = new Date(ev.starts_at).toLocaleString();
-      return `Added: "${ev.title}" at ${when}.`;
-    } catch (e) {
-      return `Could not add event: ${e.message}`;
-    }
+    const preview = previewCalendarAddEvent({ title, starts_at: starts });
+    await setPending(userId, 'add_event', { title, starts_at: starts });
+    return `${preview}\n\nReply **Yes** to add it, or **No** to cancel.`;
   }
   const rows = await getUpcomingEvents(userId);
   return `Upcoming events:\n${formatEvents(rows)}`;
@@ -578,6 +595,15 @@ async function handleNotebook(userId, userText) {
   return await formatUserRecordsReply(userId, { limit: 40, record_type: null });
 }
 
+function shouldRunAgent(trimmed, intent) {
+  const cfg = getConfig();
+  if (!cfg.agentToolsEnabled || !providerSupportsTools()) return false;
+  if (intent === 'NOTEBOOK') return false;
+  if (shouldTryBulkImport(trimmed)) return false;
+  if (shouldTryBulkCalendarSchedule(trimmed)) return false;
+  return true;
+}
+
 export async function handleTextMessage(userId, text) {
   const trimmed = text.trim();
   if (!trimmed) return { reply: 'Send a non-empty message.' };
@@ -604,6 +630,11 @@ export async function handleTextMessage(userId, text) {
           return { reply: `Could not add event: ${e.message}` };
         }
       }
+      if (pending.kind === 'tool_call') {
+        await clearPending(userId);
+        const out = await runConfirmedTool(userId, pending.payload || {}, trimmed);
+        return { reply: out.reply };
+      }
       await clearPending(userId);
       return { reply: 'Confirmation cleared.' };
     }
@@ -629,9 +660,28 @@ export async function handleTextMessage(userId, text) {
     intent = 'CHAT';
   }
 
+  if ((intent === 'CHAT' || intent === 'SEARCH' || intent === 'CALENDAR') && shouldRunAgent(trimmed, intent)) {
+    const agentOut = await runAgent({
+      userId,
+      userText: trimmed,
+      buildMessages,
+    });
+    if (agentOut.ok) {
+      return {
+        reply: agentOut.reply,
+        wantConfirmKeyboard: Boolean(agentOut.wantConfirmKeyboard),
+      };
+    }
+  }
+
   if (intent === 'SEARCH' && getConfig().webSearchEnabled) {
     const q = trimmed.replace(/^\s*(search|look\s*up|google)\s*[:\s]*/i, '').trim() || trimmed;
-    return await runWebSearch(userId, q);
+    await setPending(userId, 'web_search', { query: q });
+    const preview = previewWebSearch({ query: q });
+    return {
+      reply: `${preview}\n\nReply **Yes** to search, or **No** to cancel.`,
+      wantConfirmKeyboard: true,
+    };
   }
 
   if (intent === 'CALENDAR') {
@@ -741,6 +791,11 @@ export async function handleConfirmCallback(userId, accepted) {
     } catch (e) {
       return { reply: `Could not add event: ${e.message}` };
     }
+  }
+  if (pending.kind === 'tool_call') {
+    await clearPending(userId);
+    const out = await runConfirmedTool(userId, pending.payload || {}, '');
+    return { reply: out.reply };
   }
   await clearPending(userId);
   return { reply: 'Done.' };

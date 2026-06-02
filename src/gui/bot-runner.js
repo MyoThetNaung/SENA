@@ -4,8 +4,10 @@ import { getPool } from '../db.js';
 import { ensureLlmBackendReachable } from '../llm/llamaProcess.js';
 import { logger } from '../logger.js';
 import { listAllUserBotTokens } from '../access/userTelegramBots.js';
+import { registerRunningBots } from '../reminders/telegramDelivery.js';
+import { startReminderScheduler } from '../reminders/scheduler.js';
 
-/** @type {{ token: string, bot: import('node-telegram-bot-api') }[]} */
+/** @type {{ token: string, bot: import('node-telegram-bot-api'), botId: number|null }[]} */
 let botInstances = [];
 let starting = false;
 /** @type {string[]} */
@@ -37,6 +39,15 @@ function configuredTokens() {
   const global = Array.isArray(getConfig().telegramBotTokens) ? getConfig().telegramBotTokens : [];
   const merged = [...global, ...cachedUserBotTokens];
   return [...new Set(merged.map((t) => String(t || '').trim()).filter(Boolean))];
+}
+
+function syncRunningBotsRegistry() {
+  registerRunningBots(botInstances);
+}
+
+async function startBotInstance(token, index) {
+  const { bot, botId } = await createBot(token, index);
+  return { token, bot, botId };
 }
 
 function tokensInSync(tokens, running) {
@@ -106,11 +117,14 @@ export async function syncBotsWithConfig() {
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (runningTokens.has(token)) continue;
-    const bot = await createBot(token, i);
-    botInstances.push({ token, bot });
+    const entry = await startBotInstance(token, i);
+    botInstances.push(entry);
     started += 1;
     logger.info(`Telegram bot started for newly configured token (slot ${i + 1})`);
   }
+
+  syncRunningBotsRegistry();
+  if (botInstances.length > 0) startReminderScheduler();
 
   return {
     ok: true,
@@ -161,6 +175,7 @@ export async function startBotFromGui() {
       }
     }
     botInstances = [];
+    syncRunningBotsRegistry();
     return { ok: false, error: e.message || String(e) };
   } finally {
     starting = false;
@@ -177,11 +192,13 @@ export async function stopBotFromGui() {
       await entry.bot.stopPolling({ cancel: true });
     }
     botInstances = [];
+    syncRunningBotsRegistry();
     logger.info('Telegram polling stopped (GUI, all bots)');
     return { ok: true, botCount: 0 };
   } catch (e) {
     logger.error(`stopPolling: ${e.message}`);
     botInstances = [];
+    syncRunningBotsRegistry();
     return { ok: false, error: e.message || String(e) };
   }
 }

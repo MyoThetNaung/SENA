@@ -137,6 +137,47 @@ function buildConfig() {
     Math.max(1, Number(settings.maxBrowsePages ?? process.env.MAX_BROWSE_PAGES) || 2)
   );
   const webSearchEnabled = webSearchFromSettings(settings);
+  const agentToolsEnabled =
+    settings.agentToolsEnabled === false
+      ? false
+      : settings.agentToolsEnabled === true
+        ? true
+        : process.env.AGENT_TOOLS !== '0';
+  const ragEnabled =
+    settings.ragEnabled === false ? false : settings.ragEnabled === true ? true : process.env.RAG_ENABLED !== '0';
+  const embeddingProvider = String(
+    settings.embeddingProvider ?? process.env.EMBEDDING_PROVIDER ?? 'openai'
+  )
+    .trim()
+    .toLowerCase();
+  const embeddingModel = String(
+    settings.embeddingModel ?? process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small'
+  ).trim();
+  const embeddingDimensions = Math.min(
+    3072,
+    Math.max(64, Number(settings.embeddingDimensions ?? process.env.EMBEDDING_DIMENSIONS) || 1536)
+  );
+  const ragTopK = Math.min(20, Math.max(1, Number(settings.ragTopK ?? process.env.RAG_TOP_K) || 8));
+  const ragMinScore = Math.min(
+    1,
+    Math.max(0, Number(settings.ragMinScore ?? process.env.RAG_MIN_SCORE) || 0.25)
+  );
+  const ragAutoInject =
+    settings.ragAutoInject === true || String(process.env.RAG_AUTO_INJECT ?? '').trim() === '1';
+  const remindersEnabled =
+    settings.remindersEnabled === false
+      ? false
+      : settings.remindersEnabled === true
+        ? true
+        : process.env.REMINDERS !== '0';
+  const reminderLeadMinutes = Math.min(
+    1440,
+    Math.max(1, Number(settings.reminderLeadMinutes ?? process.env.REMINDER_LEAD_MINUTES) || 15)
+  );
+  const reminderPollIntervalMs = Math.min(
+    600_000,
+    Math.max(30_000, Number(settings.reminderPollIntervalMs ?? process.env.REMINDER_POLL_MS) || 60_000)
+  );
   const guiPort = Math.min(
     65535,
     Math.max(1024, Number(settings.guiPort ?? process.env.GUI_PORT) || 3000)
@@ -228,6 +269,17 @@ function buildConfig() {
     browserTimeoutMs,
     maxBrowsePages,
     webSearchEnabled,
+    agentToolsEnabled,
+    ragEnabled,
+    embeddingProvider,
+    embeddingModel,
+    embeddingDimensions,
+    ragTopK,
+    ragMinScore,
+    ragAutoInject,
+    remindersEnabled,
+    reminderLeadMinutes,
+    reminderPollIntervalMs,
     guiPort,
     telegramLoginDomain,
     googleClientId,

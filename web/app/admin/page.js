@@ -8,13 +8,16 @@ export default function AdminHomePage() {
   return (
     <PageSection title="Admin">
       <div className="card">
-        <h2>Control panel</h2>
+        <h2>Admin</h2>
         <p className="lead">
-          The full SENA admin UI (settings, bots, users, memory, and more) is available in the legacy panel while
-          features are migrated to this shell.
+          Manage users, audit logs, token usage, and the internal knowledge base. The legacy panel has additional
+          settings (Telegram, engine, memory, and more).
         </p>
         <div className="row">
           <Button asChild>
+            <Link href="/admin/knowledge">Knowledge base (RAG)</Link>
+          </Button>
+          <Button asChild variant="outline">
             <Link href="/admin/legacy">Open full control panel</Link>
           </Button>
         </div>

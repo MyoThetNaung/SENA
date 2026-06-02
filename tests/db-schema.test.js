@@ -21,5 +21,8 @@ describe('PostgreSQL schema file', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS user_telegram_bots');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS user_bot_access');
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS google_oauth_states');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS knowledge_sources');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS knowledge_chunks');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS knowledge_document_acl');
   });
 });

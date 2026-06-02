@@ -50,6 +50,7 @@ import {
   removeBotScopedMapKeys,
 } from '../access/telegramBots.js';
 import { handleImageMessage, handleTextMessage } from '../core/orchestrator.js';
+import { createKnowledgeRouter } from './knowledgeRoutes.js';
 import { GUI_CONSOLE_USER_ID } from '../const/guiSession.js';
 import {
   buildModelCatalog,
@@ -221,6 +222,14 @@ function readSettingsForApi() {
     browserTimeoutMs: c.browserTimeoutMs,
     maxBrowsePages: c.maxBrowsePages,
     webSearchEnabled: c.webSearchEnabled,
+    agentToolsEnabled: c.agentToolsEnabled,
+    ragEnabled: c.ragEnabled,
+    ragAutoInject: c.ragAutoInject,
+    embeddingProvider: c.embeddingProvider,
+    embeddingModel: c.embeddingModel,
+    embeddingDimensions: c.embeddingDimensions,
+    ragTopK: c.ragTopK,
+    ragMinScore: c.ragMinScore,
     databaseUrl: databaseUrlInput,
     databaseUrlResolved: maskDatabaseUrl(c.databaseUrl),
     modelsDir: c.modelsDir,
@@ -502,6 +511,34 @@ export function createApiApp() {
       }
       if (typeof b.webSearchEnabled === 'boolean') {
         patch.webSearchEnabled = b.webSearchEnabled;
+      }
+      if (typeof b.agentToolsEnabled === 'boolean') {
+        patch.agentToolsEnabled = b.agentToolsEnabled;
+      }
+      if (typeof b.ragEnabled === 'boolean') {
+        patch.ragEnabled = b.ragEnabled;
+      }
+      if (typeof b.ragAutoInject === 'boolean') {
+        patch.ragAutoInject = b.ragAutoInject;
+      }
+      if (typeof b.embeddingProvider === 'string' && b.embeddingProvider.trim()) {
+        const ep = b.embeddingProvider.trim().toLowerCase();
+        if (ep === 'openai' || ep === 'ollama') patch.embeddingProvider = ep;
+      }
+      if (typeof b.embeddingModel === 'string' && b.embeddingModel.trim()) {
+        patch.embeddingModel = b.embeddingModel.trim();
+      }
+      if (b.embeddingDimensions != null && b.embeddingDimensions !== '') {
+        const n = Number(b.embeddingDimensions);
+        if (Number.isFinite(n)) patch.embeddingDimensions = Math.min(3072, Math.max(64, Math.floor(n)));
+      }
+      if (b.ragTopK != null && b.ragTopK !== '') {
+        const n = Number(b.ragTopK);
+        if (Number.isFinite(n)) patch.ragTopK = Math.min(20, Math.max(1, Math.floor(n)));
+      }
+      if (b.ragMinScore != null && b.ragMinScore !== '') {
+        const n = Number(b.ragMinScore);
+        if (Number.isFinite(n)) patch.ragMinScore = Math.min(1, Math.max(0, n));
       }
       if (typeof b.databaseUrl === 'string') {
         const d = b.databaseUrl.trim();
@@ -1266,6 +1303,8 @@ export function createApiApp() {
       res.status(500).json({ ok: false, error: e.message });
     }
   });
+
+  app.use('/api/knowledge', createKnowledgeRouter());
 
   app.get('/api/health', (req, res) => {
     res.json({ ok: true, cwd: projectRoot });

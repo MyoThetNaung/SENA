@@ -113,6 +113,10 @@
                   <img class="nav-icon nav-icon-sub" src="/nav-icons/pending.svg" width="20" height="20" alt="" />
                   <span class="nav-item-label">Pending</span>
                 </button>
+                <button type="button" class="nav-item nav-item-sub" data-tab="knowledge">
+                  <img class="nav-icon nav-icon-sub" src="/nav-icons/memory.svg" width="20" height="20" alt="" />
+                  <span class="nav-item-label">Knowledge</span>
+                </button>
                 <button type="button" class="nav-item nav-item-sub" data-tab="system">
                   <img class="nav-icon nav-icon-sub" src="/nav-icons/system.svg" width="20" height="20" alt="" />
                   <span class="nav-item-label">System</span>
@@ -1079,6 +1083,133 @@
           </div>
         </section>
 
+        <section class="tab-panel" id="panel-knowledge">
+          <h1>
+            <span>Knowledge base (RAG)</span>
+            <div class="neo-toggle-container neural-bg-toggle-wrap" title="Animated neural background">
+              <input class="neo-toggle-input neural-bg-toggle" id="neuralBgToggleKnowledge" type="checkbox" aria-label="Neural background" />
+              <label class="neo-toggle" for="neuralBgToggleKnowledge">
+                <div class="neo-track"><div class="neo-background-layer"></div><div class="neo-grid-layer"></div><div class="neo-track-highlight"></div></div>
+                <div class="neo-thumb"><div class="neo-thumb-ring"></div><div class="neo-thumb-core"><div class="neo-thumb-icon"><div class="neo-thumb-wave"></div><div class="neo-thumb-pulse"></div></div></div></div>
+                <div class="neo-gesture-area"></div><div class="neo-interaction-feedback"><div class="neo-ripple"></div><div class="neo-progress-arc"></div></div>
+                <div class="neo-status"><div class="neo-status-indicator"><div class="neo-status-dot"></div><div class="neo-status-text"></div></div></div>
+              </label>
+            </div>
+          </h1>
+          <p class="lead">
+            Ingest wikis, Confluence exports, and markdown for the <code>search_knowledge</code> agent tool.
+            Documents are chunked, embedded, and filtered by ACL per user.
+          </p>
+          <p id="knowledgePanelStatus" class="status" aria-live="polite"></p>
+          <div class="toolbar">
+            <button type="button" id="btnKnowledgeRefresh" class="primary ghost">Refresh</button>
+          </div>
+
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Status</h2>
+            <div id="knowledgeStatusBody" class="hint">Loading…</div>
+          </div>
+
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>RAG settings</h2>
+            <p class="hint">Requires OpenAI API key (default) or Ollama with an embedding model.</p>
+            <label class="inline"><input type="checkbox" id="knowledgeRagEnabled" /> Enable internal knowledge search (RAG)</label>
+            <label class="inline"><input type="checkbox" id="knowledgeRagAutoInject" /> Auto-inject retrieved excerpts into chat system prompt</label>
+            <label>Embedding provider</label>
+            <select id="knowledgeEmbeddingProvider">
+              <option value="openai">OpenAI</option>
+              <option value="ollama">Ollama</option>
+            </select>
+            <label>Embedding model</label>
+            <input type="text" id="knowledgeEmbeddingModel" class="input" placeholder="text-embedding-3-small" />
+            <label>Embedding dimensions</label>
+            <input type="number" id="knowledgeEmbeddingDimensions" class="input" min="64" max="3072" step="1" />
+            <label>Top K chunks per search</label>
+            <input type="number" id="knowledgeRagTopK" class="input" min="1" max="20" step="1" />
+            <label>Minimum similarity score (0–1)</label>
+            <input type="number" id="knowledgeRagMinScore" class="input" min="0" max="1" step="0.05" />
+            <button type="button" id="btnKnowledgeSaveSettings" class="primary" style="margin-top: 0.75rem">Save RAG settings</button>
+          </div>
+
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Ingest single document</h2>
+            <label>Source slug</label>
+            <input type="text" id="knowledgeSourceSlug" class="input" placeholder="company-wiki" value="company-wiki" />
+            <label>Source title</label>
+            <input type="text" id="knowledgeSourceTitle" class="input" placeholder="Company Wiki" value="Company Wiki" />
+            <label>Source type</label>
+            <select id="knowledgeSourceType">
+              <option value="wiki">Wiki</option>
+              <option value="confluence">Confluence export</option>
+              <option value="file">File</option>
+            </select>
+            <label>Document title</label>
+            <input type="text" id="knowledgeDocumentTitle" class="input" placeholder="PTO Policy" />
+            <label>External id (unique per source)</label>
+            <input type="text" id="knowledgeExternalId" class="input" placeholder="pto-policy" />
+            <label>URI (optional citation link)</label>
+            <input type="text" id="knowledgeUri" class="input" placeholder="https://wiki.example.com/pto" />
+            <label>Access control</label>
+            <select id="knowledgeAclMode">
+              <option value="public">All users (public)</option>
+              <option value="restricted">Restricted to soul user ids</option>
+            </select>
+            <div id="knowledgeAclUserIdsWrap" hidden>
+              <label>Soul user ids (comma-separated)</label>
+              <input type="text" id="knowledgeAclUserIds" class="input" placeholder="123456789, 987654321" />
+            </div>
+            <label>Content (markdown or plain text)</label>
+            <textarea id="knowledgeContent" class="input" rows="10" placeholder="# Title&#10;Body…"></textarea>
+            <button type="button" id="btnKnowledgeIngest" class="primary" style="margin-top: 0.75rem">Ingest document</button>
+          </div>
+
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Import markdown files</h2>
+            <p class="hint">Select one or more <code>.md</code> / <code>.txt</code> files (wiki export folder).</p>
+            <input type="file" id="knowledgeFileInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple />
+          </div>
+
+          <div class="card" style="margin-bottom: 1rem">
+            <h2>Batch ingest (JSON)</h2>
+            <p class="hint">Paste export JSON: <code>{ "sourceSlug", "sourceTitle", "documents": [{ "title", "content", "externalId?" }] }</code></p>
+            <textarea id="knowledgeBatchJson" class="input" rows="8" placeholder='{"sourceSlug":"hr-wiki","sourceTitle":"HR Wiki","documents":[{"title":"Onboarding","content":"# Onboarding\\n..."}]}'></textarea>
+            <button type="button" id="btnKnowledgeBatchIngest" class="primary ghost" style="margin-top: 0.75rem">Run batch ingest</button>
+          </div>
+
+          <h2>Sources</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Slug</th>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Docs</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody id="knowledgeSourcesBody"></tbody>
+            </table>
+          </div>
+
+          <h2>Documents</h2>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Title</th>
+                  <th>Source</th>
+                  <th>Chunks</th>
+                  <th>Updated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="knowledgeDocsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
         <section class="tab-panel" id="panel-system">
           <h1>
             <span>System</span>
@@ -1197,6 +1328,7 @@
       </div>
     </div>
     <div id="toastHost" class="toast-host" aria-live="polite"></div>
+    <script src="/knowledge-panel.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

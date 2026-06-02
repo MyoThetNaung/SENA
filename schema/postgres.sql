@@ -218,3 +218,105 @@ CREATE TABLE IF NOT EXISTS user_bot_access (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_bot_access_owner_status ON user_bot_access (owner_soul_user_id, status);
+
+-- Enterprise knowledge (RAG): sources, documents, chunks, ACL principals
+CREATE TABLE IF NOT EXISTS knowledge_sources (
+  id BIGSERIAL PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'wiki',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now()))
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  id BIGSERIAL PRIMARY KEY,
+  source_id BIGINT NOT NULL REFERENCES knowledge_sources (id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL,
+  uri TEXT NOT NULL DEFAULT '',
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  UNIQUE (source_id, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_source ON knowledge_documents (source_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_chunks (
+  id BIGSERIAL PRIMARY KEY,
+  document_id BIGINT NOT NULL REFERENCES knowledge_documents (id) ON DELETE CASCADE,
+  chunk_index INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  embedding_json JSONB NOT NULL DEFAULT '[]',
+  token_estimate INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_document ON knowledge_chunks (document_id);
+
+CREATE TABLE IF NOT EXISTS knowledge_document_acl (
+  document_id BIGINT NOT NULL REFERENCES knowledge_documents (id) ON DELETE CASCADE,
+  principal_type TEXT NOT NULL,
+  principal_value TEXT NOT NULL,
+  PRIMARY KEY (document_id, principal_type, principal_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_acl_principal
+  ON knowledge_document_acl (principal_type, principal_value);
+
+-- Personal assistant: tasks
+CREATE TABLE IF NOT EXISTS user_tasks (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES soul (user_id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  due_at TIMESTAMPTZ,
+  priority TEXT NOT NULL DEFAULT 'normal',
+  status TEXT NOT NULL DEFAULT 'open',
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_tasks_user_status ON user_tasks (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_tasks_user_due ON user_tasks (user_id, due_at)
+  WHERE due_at IS NOT NULL;
+
+-- Proactive Telegram reminders (dedupe)
+CREATE TABLE IF NOT EXISTS calendar_reminder_sent (
+  event_id BIGINT NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL,
+  lead_minutes INTEGER NOT NULL,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  PRIMARY KEY (event_id, lead_minutes)
+);
+
+CREATE TABLE IF NOT EXISTS task_reminder_sent (
+  task_id BIGINT NOT NULL REFERENCES user_tasks (id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL,
+  lead_minutes INTEGER NOT NULL,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  PRIMARY KEY (task_id, lead_minutes)
+);
+
+-- Daily morning briefing (one per user per local date)
+CREATE TABLE IF NOT EXISTS daily_briefing_sent (
+  user_id BIGINT NOT NULL REFERENCES soul (user_id) ON DELETE CASCADE,
+  briefing_date DATE NOT NULL,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  PRIMARY KEY (user_id, briefing_date)
+);
+
+-- Per-user connector credentials (encrypted at rest)
+CREATE TABLE IF NOT EXISTS user_connector_credentials (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES soul (user_id) ON DELETE CASCADE,
+  connector_type TEXT NOT NULL,
+  credentials_encrypted TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT (timezone('utc', now())),
+  UNIQUE (user_id, connector_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_connector_user ON user_connector_credentials (user_id);

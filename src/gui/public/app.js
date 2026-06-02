@@ -14,7 +14,7 @@ let lastSettingsForGui = null;
 let botPowerSwitchSyncing = false;
 
 /** Tabs nested under the Settings toggle (sidebar). */
-const SETTINGS_SUB_TABS = new Set(['telegram', 'access', 'calendar', 'pending', 'system']);
+const SETTINGS_SUB_TABS = new Set(['telegram', 'access', 'calendar', 'pending', 'knowledge', 'system']);
 
 function setSettingsGroupOpen(open) {
   const g = $('navSettingsGroup');
@@ -1031,6 +1031,9 @@ function showTab(name) {
   if (name === 'chat') loadChat();
   if (name === 'calendar') loadCalendar();
   if (name === 'pending') loadPending();
+  if (name === 'knowledge') {
+    window.SenaKnowledgePanel?.load?.().catch((e) => setStatus(e.message, 'err'));
+  }
   syncSettingsGroupForTab(name);
   queueMicrotask(() => {
     requestAnimationFrame(() => updateScrollIndicatorScrollable());
@@ -3809,6 +3812,7 @@ function routeHash() {
     'chat',
     'calendar',
     'pending',
+    'knowledge',
     'system',
   ];
   showTab(allowed.includes(h) ? h : 'overview');
@@ -3829,6 +3833,7 @@ window.addEventListener('hashchange', routeHash);
     initNeuralBackground();
     initCustomCursor();
     $('btnAdminLogout')?.addEventListener('click', () => logoutAndRedirect('/admin-login'));
+    window.SenaKnowledgePanel?.bind?.();
     logLine('Console active. Non-routine updates and errors will appear here.');
     await loadSettingsIntoForm();
     await refreshSidebarBotPowerUi();

@@ -34,6 +34,9 @@ export const AUDIT_EVENT_TYPES = [
   'models.download_default',
   'llm.test_connection',
   'api.request',
+  'knowledge.ingest',
+  'knowledge.ingest_batch',
+  'knowledge.delete',
 ];
 
 const REDACT_BODY_KEYS = new Set([

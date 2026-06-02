@@ -5,6 +5,8 @@ import { getPool } from './db.js';
 import { ensureLlmBackendReachable } from './llm/llamaProcess.js';
 import { logger } from './logger.js';
 import { closeBrowser } from './tools/browser.js';
+import { registerRunningBots } from './reminders/telegramDelivery.js';
+import { startReminderScheduler } from './reminders/scheduler.js';
 
 try {
   assertBotConfigReady();
@@ -38,9 +40,13 @@ try {
     logger.error(reach.error || 'LLM backend unreachable');
     process.exit(1);
   }
+  const botEntries = [];
   for (const [idx, token] of (cfg.telegramBotTokens || []).entries()) {
-    await createBot(token, idx);
+    const entry = await createBot(token, idx);
+    botEntries.push({ token, bot: entry.bot, botId: entry.botId });
   }
+  registerRunningBots(botEntries);
+  startReminderScheduler();
 } catch (e) {
   logger.error(`Startup failed: ${e.message}`);
   process.exit(1);

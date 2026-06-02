@@ -196,5 +196,5 @@ export async function createBot(token, index = 0) {
 
   await bot.startPolling();
   logger.info(`Telegram[${index + 1}] bot polling started`);
-  return bot;
+  return { bot, botId };
 }

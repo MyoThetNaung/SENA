@@ -4,6 +4,7 @@ import pg from 'pg';
 import { getConfig, projectRoot } from './config.js';
 import { logger } from './logger.js';
 import { bootstrapAdminFromEnv } from './auth/adminUsers.js';
+import { ensureRagSchema } from './rag/schema.js';
 
 const { Pool } = pg;
 
@@ -114,6 +115,7 @@ export async function getPool() {
         const client = await next.connect();
         try {
           await runMigrations(client);
+          await ensureRagSchema(client);
           await bootstrapAdminFromEnv((text, params) => client.query(text, params));
         } finally {
           client.release();

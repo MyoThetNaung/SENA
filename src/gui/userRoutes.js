@@ -37,6 +37,31 @@ import { listCommonTimezones, normalizeTimezone } from '../util/timezone.js';
 import { ensureDefaultUserTimezone, DEFAULT_USER_TIMEZONE } from '../memory/soul.js';
 import { getUserMonthlyTokenUsage, monthKey } from '../llm/tokenUsage.js';
 import { listAuditLogs } from '../audit/auditLog.js';
+import { embeddingsConfigured } from '../rag/embeddings.js';
+import {
+  ingestPersonalDocument,
+  listPersonalDocuments,
+  deletePersonalDocument,
+} from '../rag/personalKnowledge.js';
+import { extractTextFromUpload } from '../rag/textUpload.js';
+import {
+  addTask,
+  listTasks,
+  completeTask,
+  deleteTask,
+} from '../tasks/tasks.js';
+import {
+  getAssistantPreferences,
+  setAssistantPreferences,
+} from '../assistant/preferences.js';
+import {
+  saveConnectorCredentials,
+  deleteConnectorCredentials,
+  listConnectorTypesForUser,
+  loadConnectorCredentials,
+  CONNECTOR_JIRA,
+} from '../connectors/credentials.js';
+import { probeJiraCredentials } from '../connectors/jira.js';
 
 function soulUserId(req) {
   return Number(req.session.soulUserId);
@@ -619,6 +644,236 @@ export function createUserRouter() {
       });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.get('/knowledge/status', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const cfg = getConfig();
+      const docs = cfg.ragEnabled ? await listPersonalDocuments(userId) : [];
+      res.json({
+        ok: true,
+        ragEnabled: cfg.ragEnabled,
+        embeddingsConfigured: embeddingsConfigured(),
+        documentCount: docs.length,
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/knowledge/documents', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const cfg = getConfig();
+      if (!cfg.ragEnabled) {
+        res.json({ ok: true, documents: [] });
+        return;
+      }
+      const documents = await listPersonalDocuments(userId);
+      res.json({ ok: true, documents });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.post('/knowledge/ingest', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const cfg = getConfig();
+      if (!cfg.ragEnabled) {
+        res.status(400).json({ ok: false, error: 'Knowledge search is disabled.' });
+        return;
+      }
+      if (!embeddingsConfigured()) {
+        res.status(400).json({ ok: false, error: 'Embeddings are not configured.' });
+        return;
+      }
+      const b = req.body || {};
+      let content = String(b.content || '').trim();
+      let documentTitle = b.documentTitle || b.title || 'Untitled';
+      if (!content && (b.fileBase64 || b.fileName)) {
+        const extracted = extractTextFromUpload({
+          fileName: b.fileName,
+          fileBase64: b.fileBase64,
+        });
+        content = extracted.text;
+        documentTitle = extracted.title || documentTitle;
+      }
+      if (!content) {
+        res.status(400).json({ ok: false, error: 'Document content is required.' });
+        return;
+      }
+      const result = await ingestPersonalDocument(userId, {
+        documentTitle,
+        content,
+        externalId: b.externalId,
+        uri: b.uri,
+        metadata: b.metadata,
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.delete('/knowledge/documents/:id', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) {
+        res.status(400).json({ ok: false, error: 'Invalid document id' });
+        return;
+      }
+      const ok = await deletePersonalDocument(userId, id);
+      if (!ok) {
+        res.status(404).json({ ok: false, error: 'Document not found.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/tasks', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const status = req.query.status ? String(req.query.status) : 'open';
+      const tasks = await listTasks(userId, { status, limit: req.query.limit });
+      res.json({ ok: true, tasks });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.post('/tasks', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const b = req.body || {};
+      const task = await addTask(userId, {
+        title: b.title,
+        due_at: b.due_at,
+        priority: b.priority,
+        notes: b.notes,
+      });
+      res.json({ ok: true, task });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.post('/tasks/:id/complete', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const task = await completeTask(userId, Number(req.params.id));
+      if (!task) {
+        res.status(404).json({ ok: false, error: 'Task not found or already done.' });
+        return;
+      }
+      res.json({ ok: true, task });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.delete('/tasks/:id', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const ok = await deleteTask(userId, Number(req.params.id));
+      if (!ok) {
+        res.status(404).json({ ok: false, error: 'Task not found.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/assistant/preferences', async (req, res) => {
+    try {
+      await getPool();
+      const prefs = await getAssistantPreferences(soulUserId(req));
+      res.json({ ok: true, preferences: prefs });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.patch('/assistant/preferences', async (req, res) => {
+    try {
+      await getPool();
+      const b = req.body || {};
+      const prefs = await setAssistantPreferences(soulUserId(req), {
+        briefingEnabled: b.briefingEnabled,
+        briefingHour: b.briefingHour,
+      });
+      res.json({ ok: true, preferences: prefs });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.get('/integrations', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const connectors = await listConnectorTypesForUser(userId);
+      res.json({
+        ok: true,
+        connectors,
+        jira: connectors.some((c) => c.connectorType === CONNECTOR_JIRA),
+      });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.put('/integrations/jira', async (req, res) => {
+    try {
+      await getPool();
+      const userId = soulUserId(req);
+      const b = req.body || {};
+      const baseUrl = String(b.baseUrl || b.base_url || '').trim();
+      const email = String(b.email || '').trim();
+      let apiToken = String(b.apiToken || b.api_token || '').trim();
+      const existing = await loadConnectorCredentials(userId, CONNECTOR_JIRA);
+      if (!baseUrl || !email) {
+        res.status(400).json({ ok: false, error: 'baseUrl and email are required.' });
+        return;
+      }
+      if (!apiToken) {
+        if (!existing?.apiToken) {
+          res.status(400).json({ ok: false, error: 'apiToken is required for new Jira connection.' });
+          return;
+        }
+        apiToken = String(existing.apiToken);
+      }
+      await saveConnectorCredentials(userId, CONNECTOR_JIRA, { baseUrl, email, apiToken });
+      await probeJiraCredentials(userId);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
+    }
+  });
+
+  router.delete('/integrations/jira', async (req, res) => {
+    try {
+      await getPool();
+      await deleteConnectorCredentials(soulUserId(req), CONNECTOR_JIRA);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ ok: false, error: e.message });
     }
   });
 
